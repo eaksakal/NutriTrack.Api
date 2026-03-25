@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NutriTrack.Api/NutriTrack.Api.csproj" />
+    <Project Path="src/NutriTrack.Domain/NutriTrack.Domain.csproj" />
+    <Project Path="src/NutriTrack.Infrastructure/NutriTrack.Infrastructure.csproj" />
+  </Folder>
+</Solution>
