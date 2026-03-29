@@ -11,6 +11,10 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddScoped<TokenService>();
+builder.Services.AddHttpClient<OpenFoodFactsService>(client =>
+{
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("NutriTrack/1.0");
+});
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
@@ -67,5 +71,7 @@ app.UseAuthorization();
 app.MapGet("/", () => Results.Ok(new { Status = "NutriTrack API is running" }));
 
 app.MapAuthEndpoints();
+app.MapFoodEndpoints();
+app.MapMealEndpoints();
 
 app.Run();
