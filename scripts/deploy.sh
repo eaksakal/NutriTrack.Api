@@ -183,4 +183,13 @@ echo -n "    /api/health: "
 # selbst ist mit 120 s Startfenster noch geduldiger als dieser eine Griff.
 curl -s -m 20 "$BASIS/api/health" || echo "(keine Antwort — docker compose logs -f nutritrack)"
 echo
+
+# /api/health sagt nichts ueber die KI-Erfassung: sie haengt an einem fremden Dienst, dessen
+# Vertrag kein Test im Repo prueft (die Tests sprechen gegen einen Stub). Bleibt das
+# unausgesprochen, faellt der Irrtum erst dem ersten Nutzer auf — als dauerhaftes 502/503.
+if grep -q '^NUTRITRACK_GEMINI_KEY=.\+' .env 2>/dev/null; then
+  echo "    HINWEIS: Gemini-Schluessel ist gesetzt. Die Anbindung ist erst geprueft, wenn"
+  echo "             scripts/gemini-probe.sh einmal durchgelaufen ist (Antwortumschlag)."
+fi
+
 echo "==> Fertig. NutriTrack: $BASIS"

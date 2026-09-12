@@ -116,6 +116,27 @@ public class FoodEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nut
     }
 
     [Fact]
+    public async Task Search_WhenOpenFoodFactsIsDown_ReturnsServiceUnavailable()
+    {
+        factory.OpenFoodFactsResponder = _ => new HttpResponseMessage(HttpStatusCode.BadGateway);
+
+        try
+        {
+            var (client, _, _) = await factory.CreateUserAsync();
+
+            var response = await client.GetAsync("/api/food/search?query=hafer");
+
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        }
+        finally
+        {
+            // Die Factory lebt fuer die ganze Testklasse. Bliebe der Ausfall stehen, haengte das
+            // Ergebnis der uebrigen Tests an der Reihenfolge, in der xUnit sie aufruft.
+            factory.OpenFoodFactsResponder = null;
+        }
+    }
+
+    [Fact]
     public async Task Barcode_WithoutToken_ReturnsUnauthorized()
     {
         var client = factory.CreateClient();

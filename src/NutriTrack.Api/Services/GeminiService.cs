@@ -1,0 +1,352 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using NutriTrack.Api.Contracts.Ai;
+
+namespace NutriTrack.Api.Services;
+
+/// <summary>Google ist erreichbar, aber nicht nutzbar (Timeout, Netz, 5xx).</summary>
+public class GeminiUnavailableException(string message, Exception? inner = null) : Exception(message, inner);
+
+/// <summary>Kontingent erschoepft (429).</summary>
+public class GeminiQuotaException(string message) : Exception(message);
+
+/// <summary>Antwort kam an, passt aber nicht zum erzwungenen Schema.</summary>
+public class GeminiMalformedResponseException(string message) : Exception(message);
+
+public class GeminiParseResult
+{
+    public string? Question { get; set; }
+    public List<GeminiItem> Items { get; set; } = [];
+}
+
+public class GeminiItem
+{
+    [JsonPropertyName("searchTerm")]
+    public string SearchTerm { get; set; } = string.Empty;
+
+    [JsonPropertyName("label")]
+    public string Label { get; set; } = string.Empty;
+
+    [JsonPropertyName("quantityInGrams")]
+    public decimal QuantityInGrams { get; set; }
+
+    [JsonPropertyName("mealType")]
+    public string MealType { get; set; } = "Snack";
+
+    [JsonPropertyName("estimate")]
+    public NutrientEstimate Estimate { get; set; } = new();
+}
+
+public class GeminiService(HttpClient httpClient, IConfiguration configuration, ILogger<GeminiService> logger)
+{
+    private const string Endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions";
+
+    // Die Interactions-API ist revisioniert. Ohne diesen Header liefert Google die jeweils
+    // neueste Revision aus — und damit potenziell einen anderen Antwortumschlag, als
+    // ExtractPayload auspackt. Der Wert nagelt genau die Revision fest, gegen die diese Klasse
+    // geschrieben ist; ein Wechsel ist dann eine bewusste Aenderung hier statt einer stillen
+    // Ueberraschung im Betrieb.
+    private const string ApiRevision = "2026-05-20";
+
+    // Die Grenze zwischen Nachfragen und Annehmen entscheidet, ob das Feature im Alltag taugt:
+    // zu viele Rueckfragen sind laestiger als die bestehende Suche.
+    //
+    // Die Einheiten stehen hier AUSDRUECKLICH je Feld. Der Rest der Anwendung fuehrt Natrium in
+    // GRAMM je 100 g (OpenFoodFacts-Feld sodium_100g, siehe MealEndpoints.CalcMicro); ein
+    // Sprachmodell nennt Natrium von sich aus praktisch immer in Milligramm. Ohne diesen Satz
+    // landet der Wert um den Faktor 1000 zu hoch im Tagebuch.
+    private const string SystemInstruction = """
+        Du zerlegst deutschsprachige Beschreibungen von Mahlzeiten in einzelne Posten.
+        Fuer jeden Posten lieferst du: searchTerm (kurzer Suchbegriff fuer eine
+        Lebensmitteldatenbank, ohne Mengenangabe), label (lesbarer Name), quantityInGrams
+        (Menge in Gramm, Fluessigkeiten in Milliliter gleich Gramm), mealType (genau einer von
+        Breakfast, Lunch, Dinner, Snack) und estimate (geschaetzte Naehrwerte je 100 g).
+        Die Einheiten in estimate sind bindend und beziehen sich IMMER auf 100 g des
+        Lebensmittels:
+          calories       Kilokalorien (kcal) je 100 g
+          protein        Gramm je 100 g
+          carbohydrates  Gramm je 100 g
+          fat            Gramm je 100 g
+          fiber          Gramm je 100 g
+          sugar          Gramm je 100 g
+          saturatedFat   Gramm je 100 g
+          sodium         GRAMM je 100 g, NICHT Milligramm. Ein Broetchen hat etwa 0.45,
+                         nicht 450. Teile einen in Milligramm gedachten Wert durch 1000.
+        Rechne Haushaltsmasse um: eine Scheibe Kaese etwa 30 g, eine Tasse Kaffee etwa 200 ml,
+        ein Broetchen etwa 60 g.
+        Fehlt eine Angabe, die den Naehrwert deutlich veraendert, stelle GENAU EINE kurze
+        Rueckfrage im Feld question und lasse items leer. Bei Kleinigkeiten nimm den ueblichen
+        Wert an, statt nachzufragen.
+        Antworte ausschliesslich im vorgegebenen Schema.
+        """;
+
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    public async Task<GeminiParseResult> ParseAsync(IReadOnlyList<ChatMessage> messages, CancellationToken ct)
+    {
+        var apiKey = configuration["Gemini:ApiKey"];
+        if (string.IsNullOrWhiteSpace(apiKey))
+            throw new GeminiUnavailableException("Gemini:ApiKey fehlt.");
+
+        var model = configuration["Gemini:Model"] is { Length: > 0 } configured
+            ? configured
+            : "gemini-3.5-flash";
+
+        var transcript = new StringBuilder();
+        foreach (var message in messages)
+            transcript.AppendLine($"{(message.Role == "assistant" ? "Rueckfrage" : "Nutzer")}: {message.Text}");
+
+        // system_instruction ist ein eigenes Feld der Interactions-API. Die Anweisung dort
+        // unterzubringen statt sie dem Nutzertext voranzustellen, haelt beides sauber getrennt:
+        // der Nutzer kann die Anweisung nicht mit eigenem Text ueberschreiben.
+        var payload = new
+        {
+            model,
+            input = transcript.ToString(),
+            system_instruction = SystemInstruction,
+            response_format = new
+            {
+                type = "text",
+                mime_type = "application/json",
+                schema = ResponseSchema
+            }
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8, "application/json")
+        };
+        request.Headers.Add("x-goog-api-key", apiKey);
+        request.Headers.Add("Api-Revision", ApiRevision);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await httpClient.SendAsync(request, ct);
+        }
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            // Timeout des HttpClient, nicht Abbruch durch den Aufrufer.
+            throw new GeminiUnavailableException("Gemini hat nicht rechtzeitig geantwortet.", ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new GeminiUnavailableException("Gemini ist nicht erreichbar.", ex);
+        }
+
+        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+            throw new GeminiQuotaException("Kontingent erschoepft.");
+
+        if (!response.IsSuccessStatusCode)
+            throw new GeminiUnavailableException($"Gemini antwortete mit {(int)response.StatusCode}.");
+
+        var body = await response.Content.ReadAsStringAsync(ct);
+        var inner = ExtractPayload(body);
+
+        GeminiParseResult result;
+        try
+        {
+            result = JsonSerializer.Deserialize<GeminiParseResult>(inner, JsonOptions)
+                     ?? throw new GeminiMalformedResponseException("Leere Antwort.");
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Gemini-Antwort passt nicht zum Schema.");
+            throw new GeminiMalformedResponseException("Antwort passt nicht zum Schema.");
+        }
+
+        foreach (var item in result.Items)
+            NormalizeEstimate(item, logger);
+
+        return result;
+    }
+
+    /// <summary>
+    /// Letzte Notbremse gegen unmoegliche Schaetzwerte, bevor sie ueber die API in die Datenbank
+    /// wandern. Der eigentliche Vertrag steht in <see cref="SystemInstruction"/> und im Schema;
+    /// dies faengt nur ab, was physikalisch nicht sein kann — denn korrigieren laesst sich ein
+    /// falscher Naehrwert spaeter nicht mehr: PUT /api/meals/{id} aendert nur Menge, Mahlzeit und
+    /// Zeit, und ueber FindReusableFoodItemAsync entstuende ein globaler FoodItem mit dem Unsinn.
+    /// Bewusst nur die unmoeglichen Bereiche: ein Wert, der bloss ungewoehnlich ist, bleibt stehen.
+    /// </summary>
+    private static void NormalizeEstimate(GeminiItem item, ILogger logger)
+    {
+        var estimate = item.Estimate;
+
+        // Reines Fett hat rund 900 kcal je 100 g; mehr kann kein Lebensmittel haben.
+        estimate.Calories = Clamp(estimate.Calories, 900m);
+
+        // Ein Naehrstoff kann nicht mehr als 100 g je 100 g ausmachen.
+        estimate.Protein = Clamp(estimate.Protein, 100m);
+        estimate.Carbohydrates = Clamp(estimate.Carbohydrates, 100m);
+        estimate.Fat = Clamp(estimate.Fat, 100m);
+        estimate.Fiber = Clamp(estimate.Fiber, 100m);
+        estimate.Sugar = Clamp(estimate.Sugar, 100m);
+        estimate.SaturatedFat = Clamp(estimate.SaturatedFat, 100m);
+
+        // Natrium fuehrt die Anwendung in GRAMM je 100 g. Selbst reines Kochsalz kommt auf nur
+        // rund 39 g Natrium je 100 g — alles darueber ist mit Sicherheit ein in Milligramm
+        // gedachter Wert (das Modell neigt trotz Anweisung dazu). Faktor 1000 statt Kappen:
+        // Kappen machte aus 450 mg glaubwuerdige 40 g und damit einen unauffaelligen Unsinn.
+        const decimal maxSodiumGramsPer100g = 40m;
+        if (estimate.Sodium > maxSodiumGramsPer100g)
+        {
+            logger.LogWarning(
+                "Natrium-Schaetzung {Value} je 100 g fuer {Label} ist als Gramm unmoeglich; " +
+                "als Milligramm gewertet und durch 1000 geteilt.", estimate.Sodium, item.Label);
+            estimate.Sodium /= 1000m;
+        }
+
+        estimate.Sodium = Clamp(estimate.Sodium, maxSodiumGramsPer100g);
+    }
+
+    private static decimal Clamp(decimal value, decimal max) => value < 0 ? 0m : Math.Min(value, max);
+
+    private static decimal? Clamp(decimal? value, decimal max) => value is null ? null : Clamp(value.Value, max);
+
+    /// <summary>
+    /// Schaelt den JSON-Text aus Googles Antwortumschlag.
+    /// Gemessen an der Interactions-API (Revision <see cref="ApiRevision"/>): die Ausgabe des
+    /// Modells steckt in <c>steps[]</c> im Schritt mit <c>type == "model_output"</c>, dort im
+    /// ersten <c>content[]</c>-Eintrag mit einem <c>text</c>-Feld. Zusaetzlich akzeptiert wird das
+    /// Bequemfeld <c>output_text</c> auf der Wurzel, das die SDKs ausweisen.
+    /// Rueckwaerts durch <c>steps</c>: vor der Modellantwort koennen Werkzeug-Schritte stehen
+    /// (function_call, google_search_call ...), die eigene content-Blöcke mitbringen; der letzte
+    /// model_output ist die eigentliche Antwort.
+    /// Die gesamte Kenntnis ueber den Umschlag steckt hier: aendert Google das Format, ist dies
+    /// die einzige Stelle, die nachzieht. Die Fehlermeldung nennt darum die tatsaechlich
+    /// empfangenen Wurzel-Feldnamen — ein Formatwechsel zeigt so sofort, wo der Text nun steckt.
+    /// </summary>
+    private static string ExtractPayload(string body)
+    {
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(body);
+        }
+        catch (JsonException)
+        {
+            throw new GeminiMalformedResponseException("Antwort von Gemini ist kein JSON.");
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("output_text", out var outputText)
+                    && outputText.ValueKind == JsonValueKind.String
+                    && outputText.GetString() is { Length: > 0 } direct)
+                {
+                    return direct;
+                }
+
+                if (root.TryGetProperty("steps", out var steps) && steps.ValueKind == JsonValueKind.Array
+                    && TextFromSteps(steps) is { } fromSteps)
+                {
+                    return fromSteps;
+                }
+            }
+
+            throw new GeminiMalformedResponseException(
+                "Unerwarteter Antwortumschlag; erwartet wurde steps[].content[].text " +
+                $"(oder output_text). Tatsaechlich empfangen: {DescribeRoot(root)}");
+        }
+    }
+
+    private static string? TextFromSteps(JsonElement steps)
+    {
+        for (var index = steps.GetArrayLength() - 1; index >= 0; index--)
+        {
+            var step = steps[index];
+            if (step.ValueKind != JsonValueKind.Object)
+                continue;
+
+            // Ein Schritt ohne type wird mitgenommen: fehlt die Angabe, ist der content-Block das
+            // einzige, woran sich die Modellausgabe erkennen laesst.
+            if (step.TryGetProperty("type", out var type)
+                && type.ValueKind == JsonValueKind.String
+                && type.GetString() != "model_output")
+            {
+                continue;
+            }
+
+            if (!step.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+                continue;
+
+            foreach (var part in content.EnumerateArray())
+            {
+                if (part.ValueKind == JsonValueKind.Object
+                    && part.TryGetProperty("text", out var text)
+                    && text.ValueKind == JsonValueKind.String
+                    && text.GetString() is { Length: > 0 } found)
+                {
+                    return found;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Nennt die Wurzel-Feldnamen der Antwort — bewusst nur die Namen, nie die Werte:
+    /// im Fehlerfall landet das im Log, und der Text der Mahlzeit gehoert dort nicht hinein.</summary>
+    private static string DescribeRoot(JsonElement root) =>
+        root.ValueKind == JsonValueKind.Object
+            ? $"Wurzelfelder [{string.Join(", ", root.EnumerateObject().Select(property => property.Name))}]"
+            : $"Wurzelelement vom Typ {root.ValueKind}";
+
+    private static object ResponseSchema => new
+    {
+        type = "object",
+        properties = new
+        {
+            question = new { type = "string" },
+            items = new
+            {
+                type = "array",
+                items = new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        searchTerm = new { type = "string" },
+                        label = new { type = "string" },
+                        quantityInGrams = new { type = "number" },
+                        mealType = new { type = "string" },
+                        // Die Einheit gehoert in das Schema, nicht nur in den Anweisungstext: das
+                        // Schema reist bei jeder Anfrage unveraendert mit und ist die Stelle, an
+                        // der das Modell die Felder zuordnet. Natrium in Gramm ist dabei der
+                        // Punkt, an dem es ohne Ansage zuverlaessig danebengreift.
+                        estimate = new
+                        {
+                            type = "object",
+                            properties = new
+                            {
+                                calories = new { type = "number", description = "Kilokalorien (kcal) je 100 g" },
+                                protein = new { type = "number", description = "Eiweiss in Gramm je 100 g" },
+                                carbohydrates = new { type = "number", description = "Kohlenhydrate in Gramm je 100 g" },
+                                fat = new { type = "number", description = "Fett in Gramm je 100 g" },
+                                fiber = new { type = "number", description = "Ballaststoffe in Gramm je 100 g" },
+                                sugar = new { type = "number", description = "Zucker in Gramm je 100 g" },
+                                saturatedFat = new { type = "number", description = "Gesaettigte Fettsaeuren in Gramm je 100 g" },
+                                sodium = new
+                                {
+                                    type = "number",
+                                    description = "Natrium in GRAMM je 100 g, nicht in Milligramm. "
+                                                  + "Beispiel: ein Broetchen hat etwa 0.45, nicht 450."
+                                }
+                            },
+                            required = new[] { "calories", "protein", "carbohydrates", "fat" }
+                        }
+                    },
+                    required = new[] { "searchTerm", "label", "quantityInGrams", "mealType", "estimate" }
+                }
+            }
+        },
+        required = new[] { "items" }
+    };
+}

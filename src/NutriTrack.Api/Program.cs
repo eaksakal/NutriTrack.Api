@@ -94,6 +94,9 @@ if (string.IsNullOrWhiteSpace(jwtIssuer) || string.IsNullOrWhiteSpace(jwtAudienc
 
 builder.Services.AddOpenApi();
 builder.Services.AddScoped<TokenService>();
+builder.Services.AddScoped<AiMealAssistant>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<AiRateLimiter>();
 builder.Services.AddHttpClient<OpenFoodFactsService>(client =>
 {
     client.DefaultRequestHeaders.UserAgent.ParseAdd("NutriTrack/1.0");
@@ -101,6 +104,13 @@ builder.Services.AddHttpClient<OpenFoodFactsService>(client =>
     // Der HttpClient-Default von 100 s bedeutet: haengt der Dienst, steht die Suche im
     // Frontend anderthalb Minuten ohne Rueckmeldung. Lieber frueh scheitern.
     client.Timeout = TimeSpan.FromSeconds(10);
+});
+
+builder.Services.AddHttpClient<GeminiService>(client =>
+{
+    // Ohne Deckel wartet der Nutzer im Zweifel 100 Sekunden auf eine Suche, die schon tot ist.
+    var seconds = builder.Configuration.GetValue("Gemini:TimeoutSeconds", 15);
+    client.Timeout = TimeSpan.FromSeconds(seconds);
 });
 
 // decimal ist unter SQLite nicht nativ; die Spalten sind in den Entity-Konfigurationen
@@ -303,6 +313,7 @@ app.MapAuthEndpoints();
 app.MapFoodEndpoints();
 app.MapMealEndpoints();
 app.MapGoalsEndpoints();
+app.MapAiEndpoints();
 
 // Unbekannte /api-Pfade muessen 404 bleiben. Der Catch-all steht in der Routen-Rangfolge unter
 // jedem konkreten Endpunkt (Literale schlagen Catch-all), greift aber vor dem SPA-Fallback -

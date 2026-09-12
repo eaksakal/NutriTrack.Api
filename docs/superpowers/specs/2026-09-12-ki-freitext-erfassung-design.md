@@ -136,6 +136,32 @@ x-goog-api-key: <NUTRITRACK_GEMINI_KEY>
 }
 ```
 
+Der Header `Api-Revision: 2026-05-20` nagelt die Revision der Interactions-API fest. Ohne ihn
+liefert Google die jeweils neueste — und damit möglicherweise einen anderen Antwortumschlag, als
+`GeminiService.ExtractPayload` auspackt.
+
+**Antwortumschlag** (der Teil, den die Doku zur Anfrage nicht zeigt): der erzeugte Text steckt in
+`steps[]`, im Schritt mit `type == "model_output"`, dort im ersten `content[]`-Eintrag mit einem
+`text`-Feld. Vor diesem Schritt können `user_input`- und Werkzeug-Schritte stehen, deshalb wird
+`steps` von hinten durchsucht. Zusätzlich weisen die SDKs das Bequemfeld `output_text` auf der
+Wurzel aus; `ExtractPayload` nimmt es, wenn es da ist.
+
+```
+{
+  "id": "v1_...",
+  "model": "<NUTRITRACK_GEMINI_MODEL>",
+  "status": "completed",
+  "steps": [
+    { "type": "user_input",   "content": [ { "type": "text", "text": "..." } ] },
+    { "type": "model_output", "content": [ { "type": "text", "text": "<das JSON oben>" } ] }
+  ],
+  "usage": { "total_input_tokens": 7, "total_output_tokens": 20 }
+}
+```
+
+Die Handprobe dazu steht in `scripts/gemini-probe.sh`; sie ist der einzige Weg, den Umschlag mit
+einem echten Schlüssel gegen den laufenden Dienst zu prüfen.
+
 Das erzwungene Schema ist der Grund, warum kein Freitext-Parser nötig ist.
 
 **Der Modellname ist konfigurierbar** (`NUTRITRACK_GEMINI_MODEL`, Vorgabe `gemini-3.5-flash`).

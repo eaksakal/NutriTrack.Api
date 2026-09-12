@@ -21,3 +21,43 @@ public sealed record UpsertGoalsRequestDto(
 public sealed record AuthResponseDto(string Token, DateTime ExpiresAt, string Email);
 
 public sealed record MeResponseDto(string UserId, string Email);
+
+public class ParseMealResponseDto
+{
+    public string? Question { get; set; }
+    public string? Notice { get; set; }
+    public List<ParsedItemDto> Items { get; set; } = [];
+}
+
+public class ParsedItemDto
+{
+    public string Label { get; set; } = string.Empty;
+    public decimal QuantityInGrams { get; set; }
+    public string MealType { get; set; } = string.Empty;
+    public string Source { get; set; } = string.Empty;
+    public List<FoodSearchDto> Candidates { get; set; } = [];
+    public NutrientEstimateDto? Estimate { get; set; }
+}
+
+/// <summary>
+/// Ausschnitt des Kandidaten-Vertrags: geprueft wird hier nur, was der KI-Pfad zusagt. Die
+/// vollstaendige Abbildung eines Suchtreffers sichern bereits die Food-Tests ab.
+/// </summary>
+public class FoodSearchDto
+{
+    public string Name { get; set; } = string.Empty;
+    public string? Brand { get; set; }
+    public string? Barcode { get; set; }
+    public decimal Calories { get; set; }
+    public decimal Protein { get; set; }
+    public decimal Carbohydrates { get; set; }
+    public decimal Fat { get; set; }
+}
+
+public class NutrientEstimateDto
+{
+    public decimal Calories { get; set; }
+    public decimal Protein { get; set; }
+    public decimal Carbohydrates { get; set; }
+    public decimal Fat { get; set; }
+}

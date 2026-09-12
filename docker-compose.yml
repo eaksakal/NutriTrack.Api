@@ -77,6 +77,11 @@ services:
       # fuer einen Vite-Dev-Server, der gegen diesen Container spricht. Weitere Eintraege als
       # Cors__Origins__1, __2 ergaenzen.
       - Cors__Origins__0=${NUTRITRACK_CORS_ORIGIN:-http://192.168.188.96:8082}
+      # Ohne Schluessel laeuft die App normal weiter, nur /api/ai meldet 503 — anders als beim
+      # Jwt-Schluessel, wo der Start bewusst abbricht. Ein nicht eingerichtetes Zusatzfeature
+      # darf das Tagebuch nicht lahmlegen, deshalb hier KEIN `:?`.
+      - Gemini__ApiKey=${NUTRITRACK_GEMINI_KEY:-}
+      - Gemini__Model=${NUTRITRACK_GEMINI_MODEL:-gemini-3.5-flash}
       - TZ=Europe/Berlin
       - DOTNET_gcServer=0
     healthcheck:

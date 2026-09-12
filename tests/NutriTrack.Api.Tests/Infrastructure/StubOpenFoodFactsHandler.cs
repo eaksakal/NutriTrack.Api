@@ -6,8 +6,13 @@ namespace NutriTrack.Api.Tests.Infrastructure;
 /// <summary>
 /// Ersetzt den Primary-Handler des OpenFoodFactsService. Die Tests duerfen nicht gegen die echte
 /// OpenFoodFacts-API laufen, sonst haengt das Ergebnis an Netzwerk und Fremddaten.
+/// Liefert <paramref name="responder"/> eine Antwort, gewinnt sie — darueber stellt ein Test den
+/// Ausfall des Fremddienstes nach, ohne das uebrige Stub-Verhalten anzufassen.
 /// </summary>
-public sealed class StubOpenFoodFactsHandler : HttpMessageHandler
+// Der Rueckgabetyp ist nullbar, nicht nur die Delegate-Referenz: "null" heisst hier ausdruecklich
+// "kein Ausfall gesetzt, nimm das normale Stub-Verhalten".
+public sealed class StubOpenFoodFactsHandler(Func<HttpRequestMessage, HttpResponseMessage?>? responder = null)
+    : HttpMessageHandler
 {
     public const string KnownBarcode = "4000417025005";
     public const string UnknownBarcode = "0000000000000";
@@ -15,6 +20,9 @@ public sealed class StubOpenFoodFactsHandler : HttpMessageHandler
     public const string SearchProductName = "Stub Haferflocken";
     public const string SearchProductBrand = "StubBrand";
     public const decimal SearchProductCalories = 372m;
+
+    /// <summary>Suchbegriff, zu dem der Stub bewusst nichts findet — fuer den Schaetzungs-Rueckfall.</summary>
+    public const string UnknownSearchTerm = "hausmannskost-ohne-treffer";
 
     public const string BarcodeProductName = "Stub Vollmilch";
     public const string BarcodeProductBrand = "StubMolkerei";
@@ -73,6 +81,10 @@ public sealed class StubOpenFoodFactsHandler : HttpMessageHandler
     }
     """;
 
+    private const string EmptySearchJson = """
+    { "count": 0, "products": [] }
+    """;
+
     private const string UnknownProductJson = """
     {
       "status": 0,
@@ -82,7 +94,19 @@ public sealed class StubOpenFoodFactsHandler : HttpMessageHandler
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        if (responder?.Invoke(request) is { } overridden)
+            return Task.FromResult(overridden);
+
         var url = request.RequestUri!.ToString();
+
+        if (url.Contains("/cgi/search.pl", StringComparison.Ordinal)
+            && url.Contains(Uri.EscapeDataString(UnknownSearchTerm), StringComparison.Ordinal))
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(EmptySearchJson, Encoding.UTF8, "application/json")
+            });
+        }
 
         var json = url.Contains("/cgi/search.pl", StringComparison.Ordinal)
             ? SearchJson

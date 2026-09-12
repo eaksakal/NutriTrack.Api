@@ -14,7 +14,17 @@ public static class FoodEndpoints
 
         group.MapGet("/search", async (string query, OpenFoodFactsService offService, AppDbContext db, int page = 1, int pageSize = 20) =>
         {
-            var products = await offService.SearchAsync(query, page, pageSize);
+            List<OpenFoodFactsProduct> products;
+            try
+            {
+                products = await offService.SearchAsync(query, page, pageSize);
+            }
+            catch (OpenFoodFactsUnavailableException)
+            {
+                return Results.Json(
+                    new { Error = "Die Lebensmitteldatenbank ist gerade nicht erreichbar." },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
 
             var results = products
                 .Where(p => p.ProductName is not null)
@@ -45,7 +55,18 @@ public static class FoodEndpoints
 
         group.MapGet("/barcode/{barcode}", async (string barcode, OpenFoodFactsService offService) =>
         {
-            var product = await offService.GetByBarcodeAsync(barcode);
+            OpenFoodFactsProduct? product;
+            try
+            {
+                product = await offService.GetByBarcodeAsync(barcode);
+            }
+            catch (OpenFoodFactsUnavailableException)
+            {
+                return Results.Json(
+                    new { Error = "Die Lebensmitteldatenbank ist gerade nicht erreichbar." },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
             if (product is null)
                 return Results.NotFound(new { Error = "Product not found" });
 

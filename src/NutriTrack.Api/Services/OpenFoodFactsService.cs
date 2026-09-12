@@ -3,20 +3,55 @@ using System.Text.Json.Serialization;
 
 namespace NutriTrack.Api.Services;
 
-public class OpenFoodFactsService(HttpClient httpClient)
+/// <summary>Die Fremddatenbank ist nicht erreichbar oder antwortet unbrauchbar.</summary>
+public class OpenFoodFactsUnavailableException(string message, Exception? inner = null) : Exception(message, inner);
+
+public class OpenFoodFactsService(HttpClient httpClient, ILogger<OpenFoodFactsService> logger)
 {
-    public async Task<List<OpenFoodFactsProduct>> SearchAsync(string query, int page = 1, int pageSize = 20)
+    public async Task<List<OpenFoodFactsProduct>> SearchAsync(
+        string query, int page = 1, int pageSize = 20, CancellationToken ct = default)
     {
         var url = $"https://world.openfoodfacts.org/cgi/search.pl?search_terms={Uri.EscapeDataString(query)}&search_simple=1&action=process&json=1&page={page}&page_size={pageSize}";
-        var response = await httpClient.GetFromJsonAsync<OpenFoodFactsSearchResponse>(url);
-        return response?.Products ?? [];
+
+        try
+        {
+            var response = await httpClient.GetFromJsonAsync<OpenFoodFactsSearchResponse>(url, ct);
+            return response?.Products ?? [];
+        }
+        // Muss VOR dem Ausfall-Griff stehen: ein Abbruch durch den Aufrufer kommt ebenfalls als
+        // TaskCanceledException an, ist aber kein Ausfall der Fremddatenbank. Wer abbricht, will
+        // ein Ende sehen und keinen Rueckfall auf Schaetzwerte.
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            // Ohne diesen Griff erreicht der Ausfall den Nutzer als 500 mit leerem Body. Wichtiger
+            // noch: der KI-Pfad muss "nichts gefunden" von "Dienst kaputt" unterscheiden koennen,
+            // sonst schaetzt er Naehrwerte, obwohl es echte Daten gaebe.
+            logger.LogWarning(ex, "OpenFoodFacts-Suche fehlgeschlagen.");
+            throw new OpenFoodFactsUnavailableException("OpenFoodFacts ist nicht erreichbar.", ex);
+        }
     }
 
-    public async Task<OpenFoodFactsProduct?> GetByBarcodeAsync(string barcode)
+    public async Task<OpenFoodFactsProduct?> GetByBarcodeAsync(string barcode, CancellationToken ct = default)
     {
-        var response = await httpClient.GetFromJsonAsync<OpenFoodFactsBarcodeResponse>(
-            $"https://world.openfoodfacts.org/api/v0/product/{barcode}.json");
-        return response is { Status: 1 } ? response.Product : null;
+        try
+        {
+            var response = await httpClient.GetFromJsonAsync<OpenFoodFactsBarcodeResponse>(
+                $"https://world.openfoodfacts.org/api/v0/product/{barcode}.json", ct);
+            return response is { Status: 1 } ? response.Product : null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            logger.LogWarning(ex, "OpenFoodFacts-Abfrage fuer Barcode {Barcode} fehlgeschlagen.", barcode);
+            throw new OpenFoodFactsUnavailableException("OpenFoodFacts ist nicht erreichbar.", ex);
+        }
     }
 }
 

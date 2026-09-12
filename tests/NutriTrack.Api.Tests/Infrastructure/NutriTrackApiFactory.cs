@@ -45,6 +45,14 @@ public class NutriTrackApiFactory : WebApplicationFactory<AuthResponse>, IAsyncL
     // geloescht werden kann.
     private string ConnectionString => $"Data Source={_databasePath};Foreign Keys=True;Pooling=False";
 
+    /// <summary>Antwortverhalten des Gemini-Stubs. Je Testklasse eine eigene Factory-Instanz,
+    /// deshalb ist eine veraenderbare Property hier gefahrlos.</summary>
+    public Func<HttpRequestMessage, HttpResponseMessage> GeminiResponder { get; set; } =
+        _ => StubGeminiHandler.Payload("""{"items":[]}""");
+
+    /// <summary>Null bedeutet: normales Stub-Verhalten. Gesetzt: diese Antwort fuer jede Anfrage.</summary>
+    public Func<HttpRequestMessage, HttpResponseMessage>? OpenFoodFactsResponder { get; set; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         Directory.CreateDirectory(DataRoot);
@@ -56,6 +64,8 @@ public class NutriTrackApiFactory : WebApplicationFactory<AuthResponse>, IAsyncL
         builder.UseSetting("Jwt:Key", TestJwtKey);
         builder.UseSetting("Jwt:Issuer", "NutriTrack");
         builder.UseSetting("Jwt:Audience", "NutriTrack");
+        builder.UseSetting("Gemini:ApiKey", "test-key");
+        builder.UseSetting("Gemini:Model", "gemini-3.5-flash");
 
         builder.ConfigureTestServices(services =>
         {
@@ -65,7 +75,10 @@ public class NutriTrackApiFactory : WebApplicationFactory<AuthResponse>, IAsyncL
             // Erneutes AddHttpClient fuer denselben typisierten Client haengt nur eine weitere
             // Konfiguration an denselben Namen an; der zuletzt gesetzte Primary-Handler gewinnt.
             services.AddHttpClient<OpenFoodFactsService>()
-                .ConfigurePrimaryHttpMessageHandler(() => new StubOpenFoodFactsHandler());
+                .ConfigurePrimaryHttpMessageHandler(() => new StubOpenFoodFactsHandler(request => OpenFoodFactsResponder?.Invoke(request)));
+
+            services.AddHttpClient<GeminiService>()
+                .ConfigurePrimaryHttpMessageHandler(() => new StubGeminiHandler(request => GeminiResponder(request)));
         });
     }
 
