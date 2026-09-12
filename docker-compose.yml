@@ -82,6 +82,9 @@ services:
       # darf das Tagebuch nicht lahmlegen, deshalb hier KEIN `:?`.
       - Gemini__ApiKey=${NUTRITRACK_GEMINI_KEY:-}
       - Gemini__Model=${NUTRITRACK_GEMINI_MODEL:-gemini-3.5-flash}
+      # minimal statt der Voreinstellung: gemessen 3,0 s statt 8-15 s und 210 statt 1185 Token bei
+      # gleicher Qualitaet. Fuer eine Extraktion mit erzwungenem Schema ist Gruebeln verschwendet.
+      - Gemini__ThinkingLevel=${NUTRITRACK_GEMINI_THINKING:-minimal}
       # OpenFoodFacts verlangt einen User-Agent der Form "AppName/Version (ContactEmail)" und
       # behandelt Aufrufer ohne erkennbare Kennung im Zweifel als Bot. Ohne Wert laeuft alles
       # weiter, aber mit hoeherem Sperrrisiko - deshalb kein Pflichtfeld.

@@ -119,7 +119,11 @@ builder.Services.AddHttpClient<OpenFoodFactsService>(client =>
 builder.Services.AddHttpClient<GeminiService>(client =>
 {
     // Ohne Deckel wartet der Nutzer im Zweifel 100 Sekunden auf eine Suche, die schon tot ist.
-    var seconds = builder.Configuration.GetValue("Gemini:TimeoutSeconds", 15);
+    // 15 s waren zu knapp: der erste echte Aufruf am 2026-09-12 lief in den Deckel, weil das
+    // Modell ausgiebig "nachdachte". Mit thinking_level=low ist das entschaerft, aber die
+    // Antwortzeit schwankt weiterhin - ein erfolgreicher Aufruf nach 20 s ist dem Nutzer lieber
+    // als ein Abbruch nach 15.
+    var seconds = builder.Configuration.GetValue("Gemini:TimeoutSeconds", 25);
     client.Timeout = TimeSpan.FromSeconds(seconds);
 });
 

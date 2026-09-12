@@ -102,6 +102,19 @@ public class GeminiService(HttpClient httpClient, IConfiguration configuration, 
         // system_instruction ist ein eigenes Feld der Interactions-API. Die Anweisung dort
         // unterzubringen statt sie dem Nutzertext voranzustellen, haelt beides sauber getrennt:
         // der Nutzer kann die Anweisung nicht mit eigenem Text ueberschreiben.
+        // Die Handprobe am 2026-09-12 zeigte 859 "thought"-Token bei 1185 Token gesamt - fast drei
+        // Viertel des Aufwands floss ins Nachdenken, und der erste echte Aufruf riss dadurch den
+        // 15-Sekunden-Deckel. Fuer eine Extraktion mit erzwungenem Antwortschema ist das
+        // verschwendete Zeit: das Modell muss Text zerlegen, nicht gruebeln.
+        // Gemessen am echten Dienst (gemini-3.5-flash, 2026-09-12, gleiche Eingabe):
+        //   Standard  8-15 s, 859 Denk-Token, 1185 Token gesamt  (riss den Zeitdeckel)
+        //   low        5,3 s, 637 Denk-Token,  843 Token gesamt
+        //   minimal    3,0 s,   0 Denk-Token,  210 Token gesamt
+        // Die Postenliste war bei allen dreien gleich gut. Fuenfmal weniger Token bei einem
+        // Drittel der Wartezeit, ohne Qualitaetsverlust - deshalb minimal.
+        // Konfigurierbar, weil nicht jedes Modell dieselben Stufen kennt (minimal/low/medium/high).
+        var thinkingLevel = configuration["Gemini:ThinkingLevel"] is { Length: > 0 } stufe ? stufe : "minimal";
+
         var payload = new
         {
             model,
@@ -112,7 +125,8 @@ public class GeminiService(HttpClient httpClient, IConfiguration configuration, 
                 type = "text",
                 mime_type = "application/json",
                 schema = ResponseSchema
-            }
+            },
+            generation_config = new { thinking_level = thinkingLevel }
         };
 
         using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
