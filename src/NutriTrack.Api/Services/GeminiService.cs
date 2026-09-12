@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using NutriTrack.Api.Contracts.Ai;
+using NutriTrack.Domain.Entities;
 
 namespace NutriTrack.Api.Services;
 
@@ -158,7 +159,10 @@ public class GeminiService(HttpClient httpClient, IConfiguration configuration, 
         }
 
         foreach (var item in result.Items)
+        {
+            item.MealType = NormalizeMealType(item.MealType);
             NormalizeEstimate(item, logger);
+        }
 
         return result;
     }
@@ -257,6 +261,35 @@ public class GeminiService(HttpClient httpClient, IConfiguration configuration, 
         }
     }
 
+    /// <summary>
+    /// Bringt den Mahlzeitentyp auf einen der vier Enum-Werte.
+    ///
+    /// Zweiter Riegel hinter dem enum im Antwortschema: das Schema ist Googles Zusage, diese
+    /// Methode die Absicherung dagegen, dass die Zusage bricht. Bei der Handprobe am 2026-09-12
+    /// kam "Frühstück" zurueck — unser Prompt ist deutsch, also antwortet das Modell deutsch.
+    /// Ohne Umsetzung lehnt MealEndpoints den Eintrag spaeter mit 400 ab, und der Nutzer haette
+    /// eine Bestaetigungsmaske vor sich, die sich nicht uebernehmen laesst.
+    ///
+    /// Unbekanntes wird zu Snack statt zu einem Fehler: der Typ ist in der Maske ohnehin
+    /// aenderbar, und eine ganze Mahlzeit an einer Vokabel scheitern zu lassen waere
+    /// unverhaeltnismaessig.
+    /// </summary>
+    public static string NormalizeMealType(string? mealType)
+    {
+        var wert = (mealType ?? string.Empty).Trim();
+
+        if (Enum.TryParse<MealType>(wert, ignoreCase: true, out var treffer) && Enum.IsDefined(treffer))
+            return treffer.ToString();
+
+        return wert.ToLowerInvariant() switch
+        {
+            "frühstück" or "fruehstueck" or "fruhstuck" or "morgens" or "breakfast" => "Breakfast",
+            "mittagessen" or "mittag" or "mittags" or "lunch" => "Lunch",
+            "abendessen" or "abendbrot" or "abend" or "abends" or "dinner" => "Dinner",
+            _ => "Snack",
+        };
+    }
+
     private static string? TextFromSteps(JsonElement steps)
     {
         for (var index = steps.GetArrayLength() - 1; index >= 0; index--)
@@ -316,7 +349,15 @@ public class GeminiService(HttpClient httpClient, IConfiguration configuration, 
                         searchTerm = new { type = "string" },
                         label = new { type = "string" },
                         quantityInGrams = new { type = "number" },
-                        mealType = new { type = "string" },
+                        // Wertemenge gehoert ins Schema, nicht nur in den Anweisungstext. Die
+                        // Handprobe am 2026-09-12 lieferte "Frühstück": das Modell antwortet in
+                        // der Sprache des Prompts, und unser Prompt ist deutsch. Mit enum erzwingt
+                        // Google die vier zulaessigen Werte schon beim Erzeugen.
+                        mealType = new
+                        {
+                            type = "string",
+                            @enum = new[] { "Breakfast", "Lunch", "Dinner", "Snack" }
+                        },
                         // Die Einheit gehoert in das Schema, nicht nur in den Anweisungstext: das
                         // Schema reist bei jeder Anfrage unveraendert mit und ist die Stelle, an
                         // der das Modell die Felder zuordnet. Natrium in Gramm ist dabei der

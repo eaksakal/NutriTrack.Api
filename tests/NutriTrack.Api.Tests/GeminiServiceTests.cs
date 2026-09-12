@@ -191,4 +191,74 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
         Assert.Contains("candidates", exception.Message);
         Assert.Contains("usageMetadata", exception.Message);
     }
+
+    [Theory]
+    [InlineData("Frühstück", "Breakfast")]
+    [InlineData("fruehstueck", "Breakfast")]
+    [InlineData("Mittagessen", "Lunch")]
+    [InlineData("Abendessen", "Dinner")]
+    [InlineData("Abendbrot", "Dinner")]
+    [InlineData("Zwischendurch", "Snack")]
+    [InlineData("breakfast", "Breakfast")]
+    [InlineData("", "Snack")]
+    public void NormalizeMealType_BringtDeutscheAntwortenAufDasEnum(string eingabe, string erwartet)
+        => Assert.Equal(erwartet, GeminiService.NormalizeMealType(eingabe));
+
+    /// <summary>
+    /// Der Fall aus der Handprobe gegen den echten Dienst am 2026-09-12: der Prompt ist deutsch,
+    /// also antwortete das Modell mit "Frühstück" statt "Breakfast". Ungefiltert weitergereicht
+    /// haette MealEndpoints den Eintrag spaeter mit 400 abgelehnt.
+    /// </summary>
+    [Fact]
+    public async Task ParseAsync_MitDeutschemMahlzeitentyp_LiefertEnumWert()
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        {
+          "items": [
+            { "searchTerm": "Broetchen", "label": "Weizenbrötchen (2 Stück)",
+              "quantityInGrams": 100, "mealType": "Frühstück",
+              "estimate": { "calories": 272, "protein": 8.5, "carbohydrates": 53, "fat": 1.5,
+                            "sodium": 0.55 } }
+          ]
+        }
+        """);
+
+        var result = await Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "zwei Broetchen" }],
+            CancellationToken.None);
+
+        var item = Assert.Single(result.Items);
+        Assert.Equal("Breakfast", item.MealType);
+        // Natrium kam bei der Probe korrekt in Gramm; das darf die Normalisierung nicht verbiegen.
+        Assert.Equal(0.55m, item.Estimate.Sodium);
+    }
+
+    /// <summary>
+    /// Ebenfalls aus der Probe: vor der Modellantwort steht ein "thought"-Schritt. Wer blind
+    /// steps[0] liest, bekommt eine Signatur statt des JSON.
+    /// </summary>
+    [Fact]
+    public async Task ParseAsync_MitVorangehendemThoughtSchritt_FindetDieModellantwort()
+    {
+        factory.GeminiResponder = _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent("""
+            {
+              "status": "completed",
+              "steps": [
+                { "type": "thought", "signature": "EtESCs4SARFNMg+2PL0F6Ojk97zqxNzEdVJB" },
+                { "type": "model_output", "content": [ { "type": "text", "text":
+                  "{\"items\":[{\"searchTerm\":\"Apfel\",\"label\":\"Apfel\",\"quantityInGrams\":150,\"mealType\":\"Snack\",\"estimate\":{\"calories\":52,\"protein\":0.3,\"carbohydrates\":14,\"fat\":0.2}}]}"
+                } ] }
+              ]
+            }
+            """, System.Text.Encoding.UTF8, "application/json")
+        };
+
+        var result = await Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "ein Apfel" }],
+            CancellationToken.None);
+
+        Assert.Equal("Apfel", Assert.Single(result.Items).Label);
+    }
 }
