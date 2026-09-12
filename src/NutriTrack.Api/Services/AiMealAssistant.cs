@@ -7,7 +7,6 @@ namespace NutriTrack.Api.Services;
 public class AiMealAssistant(
     GeminiService gemini,
     OpenFoodFactsService openFoodFacts,
-    OpenFoodFactsThrottle throttle,
     IMemoryCache cache,
     ILogger<AiMealAssistant> logger)
 {
@@ -173,15 +172,6 @@ public class AiMealAssistant(
         if (cache.TryGetValue(cacheKey, out List<FoodSearchResponse>? cached) && cached is not null)
             return (cached, false);
 
-        // Erst fragen, ob wir ueberhaupt duerfen. Ein Aufruf ueber dem Limit bringt kein Ergebnis,
-        // sondern einen 503 von OpenFoodFacts - und bei Wiederholung eine Sperre unserer IP.
-        if (!throttle.TryAcquireSearch())
-        {
-            logger.LogWarning(
-                "Suchkontingent erschoepft; {SearchTerm} nutzt die Schaetzung statt einer Anfrage.", searchTerm);
-            return ([], true);
-        }
-
         List<OpenFoodFactsProduct> products;
         try
         {
@@ -197,6 +187,15 @@ public class AiMealAssistant(
                 "Zeitbudget von {Seconds} s fuer die Kandidatensuche erschoepft; {SearchTerm} nutzt die Schaetzung.",
                 SearchBudgetSeconds, searchTerm);
             return ([], false);
+        }
+        // Gar nicht erst gefragt, weil das Kontingent leer war. Der Posten faellt auf die
+        // Schaetzung zurueck UND der Nutzer erfaehrt den Grund - anders als beim Ausfall, wo es
+        // nichts gibt, das er anders machen koennte.
+        catch (OpenFoodFactsThrottledException)
+        {
+            logger.LogWarning(
+                "Suchkontingent erschoepft; {SearchTerm} nutzt die Schaetzung statt einer Anfrage.", searchTerm);
+            return ([], true);
         }
         catch (OpenFoodFactsUnavailableException ex)
         {

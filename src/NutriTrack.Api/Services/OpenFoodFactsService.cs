@@ -6,33 +6,80 @@ namespace NutriTrack.Api.Services;
 /// <summary>Die Fremddatenbank ist nicht erreichbar oder antwortet unbrauchbar.</summary>
 public class OpenFoodFactsUnavailableException(string message, Exception? inner = null) : Exception(message, inner);
 
-public class OpenFoodFactsService(HttpClient httpClient, ILogger<OpenFoodFactsService> logger)
+/// <summary>
+/// Wir haben gar nicht erst gefragt, weil das eigene Suchkontingent erschoepft war. Bewusst von
+/// <see cref="OpenFoodFactsUnavailableException"/> getrennt: "nicht gefragt" ist ein anderer
+/// Zustand als "gefragt und keine Antwort bekommen", und der Nutzer bekommt eine andere Auskunft.
+/// </summary>
+public class OpenFoodFactsThrottledException(string message) : Exception(message);
+
+public class OpenFoodFactsService(
+    HttpClient httpClient,
+    OpenFoodFactsThrottle throttle,
+    TimeProvider timeProvider,
+    ILogger<OpenFoodFactsService> logger)
 {
+    // Beobachtet am 2026-09-12: die Suche von OpenFoodFacts antwortet zeitweise bei JEDEM ZWEITEN
+    // Aufruf mit 503, ohne dass ein Limit verletzt waere - fuenf Aufrufe im Abstand von zwei
+    // Sekunden ergaben 503/200/503/200/503. Ein einziger Wiederholungsversuch druckt die
+    // Fehlerquote von rund der Haelfte auf etwa ein Viertel; ohne ihn steht der KI-Pfad meistens
+    // auf Schaetzwerten, obwohl es echte Daten gaebe. Mehr als ein Versuch lohnt nicht: er kostet
+    // Suchkontingent und Wartezeit, und wer zweimal hintereinander 503 sagt, meint es ernst.
+    private const int MaxAttempts = 2;
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(400);
+
     public async Task<List<OpenFoodFactsProduct>> SearchAsync(
         string query, int page = 1, int pageSize = 20, CancellationToken ct = default)
     {
         var url = $"https://world.openfoodfacts.org/cgi/search.pl?search_terms={Uri.EscapeDataString(query)}&search_simple=1&action=process&json=1&page={page}&page_size={pageSize}";
 
-        try
+        Exception? letzterFehler = null;
+
+        for (var versuch = 1; versuch <= MaxAttempts; versuch++)
         {
-            var response = await httpClient.GetFromJsonAsync<OpenFoodFactsSearchResponse>(url, ct);
-            return response?.Products ?? [];
+            // Das Kontingent wird HIER genommen, nicht beim Aufrufer: nur so zaehlen alle Wege in
+            // die Suche mit - die Suchseite ebenso wie der KI-Pfad - und ein Wiederholungsversuch
+            // zaehlt als das, was er ist, naemlich als weitere Anfrage an den Fremddienst.
+            if (!throttle.TryAcquireSearch())
+            {
+                if (letzterFehler is null)
+                    throw new OpenFoodFactsThrottledException("Suchkontingent erschoepft.");
+
+                // Kein Kontingent fuer den zweiten Anlauf: der erste Fehler zaehlt.
+                break;
+            }
+
+            try
+            {
+                var response = await httpClient.GetFromJsonAsync<OpenFoodFactsSearchResponse>(url, ct);
+                return response?.Products ?? [];
+            }
+            // Muss VOR dem Ausfall-Griff stehen: ein Abbruch durch den Aufrufer kommt ebenfalls als
+            // TaskCanceledException an, ist aber kein Ausfall der Fremddatenbank. Wer abbricht, will
+            // ein Ende sehen und keinen Rueckfall auf Schaetzwerte.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+            {
+                letzterFehler = ex;
+
+                if (versuch < MaxAttempts)
+                {
+                    logger.LogInformation(
+                        "OpenFoodFacts-Suche fuer {Query} fehlgeschlagen (Versuch {Versuch}), ein zweiter Anlauf.",
+                        query, versuch);
+                    await Task.Delay(RetryDelay, timeProvider, ct);
+                }
+            }
         }
-        // Muss VOR dem Ausfall-Griff stehen: ein Abbruch durch den Aufrufer kommt ebenfalls als
-        // TaskCanceledException an, ist aber kein Ausfall der Fremddatenbank. Wer abbricht, will
-        // ein Ende sehen und keinen Rueckfall auf Schaetzwerte.
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
-        {
-            // Ohne diesen Griff erreicht der Ausfall den Nutzer als 500 mit leerem Body. Wichtiger
-            // noch: der KI-Pfad muss "nichts gefunden" von "Dienst kaputt" unterscheiden koennen,
-            // sonst schaetzt er Naehrwerte, obwohl es echte Daten gaebe.
-            logger.LogWarning(ex, "OpenFoodFacts-Suche fehlgeschlagen.");
-            throw new OpenFoodFactsUnavailableException("OpenFoodFacts ist nicht erreichbar.", ex);
-        }
+
+        // Ohne diesen Griff erreicht der Ausfall den Nutzer als 500 mit leerem Body. Wichtiger
+        // noch: der KI-Pfad muss "nichts gefunden" von "Dienst kaputt" unterscheiden koennen,
+        // sonst schaetzt er Naehrwerte, obwohl es echte Daten gaebe.
+        logger.LogWarning(letzterFehler, "OpenFoodFacts-Suche fuer {Query} endgueltig fehlgeschlagen.", query);
+        throw new OpenFoodFactsUnavailableException("OpenFoodFacts ist nicht erreichbar.", letzterFehler);
     }
 
     public async Task<OpenFoodFactsProduct?> GetByBarcodeAsync(string barcode, CancellationToken ct = default)

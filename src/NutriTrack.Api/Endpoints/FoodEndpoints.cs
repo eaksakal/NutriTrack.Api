@@ -19,6 +19,14 @@ public static class FoodEndpoints
             {
                 products = await offService.SearchAsync(query, page, pageSize);
             }
+            // Getrennt von der Nichterreichbarkeit: hier kann der Nutzer etwas tun, naemlich
+            // kurz warten. Ein 503 wuerde ihm sagen, der Dienst sei kaputt - er ist es nicht.
+            catch (OpenFoodFactsThrottledException)
+            {
+                return Results.Json(
+                    new { Error = "Zu viele Suchen in kurzer Zeit. Versuche es in einer Minute noch einmal." },
+                    statusCode: StatusCodes.Status429TooManyRequests);
+            }
             catch (OpenFoodFactsUnavailableException)
             {
                 return Results.Json(
@@ -59,6 +67,14 @@ public static class FoodEndpoints
             try
             {
                 product = await offService.GetByBarcodeAsync(barcode);
+            }
+            // Getrennt von der Nichterreichbarkeit: hier kann der Nutzer etwas tun, naemlich
+            // kurz warten. Ein 503 wuerde ihm sagen, der Dienst sei kaputt - er ist es nicht.
+            catch (OpenFoodFactsThrottledException)
+            {
+                return Results.Json(
+                    new { Error = "Zu viele Suchen in kurzer Zeit. Versuche es in einer Minute noch einmal." },
+                    statusCode: StatusCodes.Status429TooManyRequests);
             }
             catch (OpenFoodFactsUnavailableException)
             {
