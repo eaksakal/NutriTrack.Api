@@ -10,6 +10,7 @@ public class AppDbContext : IdentityDbContext
 
     public DbSet<FoodItem> FoodItems => Set<FoodItem>();
     public DbSet<MealEntry> MealEntries => Set<MealEntry>();
+    public DbSet<UserGoal> UserGoals => Set<UserGoal>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

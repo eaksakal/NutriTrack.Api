@@ -6,7 +6,20 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.5" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
+    <!-- SQLite statt Postgres: die App laeuft als einzelner Container mit einer Datei im
+         Bind-Mount /data. Kein zweiter Container, kein Netzwerk, kein Dump-Restore. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.5" />
+    <!-- Hochgezogen am 2026-09-12: EF 10.0.5 zieht transitiv SQLitePCLRaw 2.1.11, und
+         "dotnet build" meldet dafuer NU1903 (GHSA-2m69-gcr7-jv3q, hoher Schweregrad). 2.1.13
+         bringt die gefixte native e_sqlite3 mit. Diese Zeile darf wieder raus, sobald ein
+         EF-Release von sich aus >= 2.1.13 referenziert. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
+    <!-- Design nur zur Entwurfszeit: Migrationen liegen in diesem Projekt und werden mit
+         diesem Projekt auch als Startprojekt erzeugt (siehe AppDbContextDesignTimeFactory). -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.5">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
   </ItemGroup>
 
   <PropertyGroup>

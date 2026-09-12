@@ -10,6 +10,20 @@ obj/
 ## Secrets
 appsettings.*.local.json
 *.pfx
+.env
+
+## Datenbank (NIE einchecken)
+# `dotnet run` ohne NUTRITRACK_DATA_ROOT legt src/NutriTrack.Api/data/nutritrack.db an - der Pfad
+# liegt NICHT unter bin/ oder obj/ und faellt damit unter keine Regel oben. In der Datei stehen
+# AspNetUsers samt E-Mail, PasswordHash und SecurityStamp; ein `git add -A` nach einem lokalen
+# Lauf wuerde sie mitnehmen. Die .dockerignore nimmt dieselben Muster bereits aus.
+# Anker auf das Datenverzeichnis des Api-Projekts statt eines blossen `data/`: letzteres kaeme
+# auf einem case-insensitiven Dateisystem dem Quellordner src/NutriTrack.Infrastructure/Data
+# gefaehrlich nahe.
+/src/NutriTrack.Api/data/
+*.db
+*.db-wal
+*.db-shm
 
 ## IDE
 .idea/

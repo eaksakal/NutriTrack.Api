@@ -1,0 +1,92 @@
+# NutriTrack-Stack fuer den Ubuntu-Laptop (Hostname mbox, x86_64, 8 GB, 192.168.188.96).
+#
+# Gebaut wird AUF DEM ZIEL — kein Cross-Build, kein `docker save | ssh docker load`. Der Rechner
+# hat genug Luft dafuer, und alles, was hier steht, gilt damit auch fuer den Rechner, der es baut.
+#
+# NACHBARN AUF DIESEM RECHNER: 8080 gehoert mbox, 8081 romm, 8200 dem DLNA-Dienst. NutriTrack
+# bekommt 8082. Diese Datei startet ABSICHTLICH keinen eigenen autoheal-Container: der von mbox
+# (mbox-autoheal, willfarrell/autoheal) haengt am Docker-Socket und betreut damit JEDEN Container
+# des Rechners mit dem Label autoheal=true, ueber Stapelgrenzen hinweg. Ein zweiter wuerde dieselbe
+# Arbeit doppelt tun und sich mit dem ersten um die Neustarts streiten.
+# ACHTUNG: mbox-autoheal laeuft dort unter `profiles: [warp]`. Wird mbox einmal ohne dieses Profil
+# gestartet, ist auch NutriTrack ohne Aufsicht — dann ein eigenes autoheal hier ergaenzen.
+services:
+  nutritrack:
+    build:
+      # Elternverzeichnis beider Repos, siehe Kopf des Dockerfiles.
+      context: ..
+      dockerfile: NutriTrack.Api/Dockerfile
+      args:
+        # Leer lassen: die API liefert die SPA vom selben Origin aus, ein relativer Pfad traegt
+        # durch jeden Port und jeden spaeteren Reverse-Proxy. Der Wert wird ins Bundle gebacken
+        # und ist zur Laufzeit NICHT mehr aenderbar.
+        VITE_API_URL: ${VITE_API_URL:-}
+        APP_VERSION: ${APP_VERSION:-dev}
+    image: nutritrack:latest
+    container_name: nutritrack
+    restart: unless-stopped
+    # UEBERNOMMEN VON mbox (2026-09-12), NICHT GEMESSEN. mbox' Gigabyte ist fuer einen
+    # Medien-/ffmpeg-Dienst gerechnet; NutriTrack braucht mutmasslich deutlich weniger (eine
+    # Minimal-API mit SQLite). Der Deckel soll ein Leck begrenzen, nicht den Normalbetrieb — er
+    # bleibt deshalb vorerst grosszuegig. NACHMESSEN, sobald der Dienst ein paar Tage laeuft
+    # (`docker stats nutritrack`), und den gemessenen Wert samt Datum hier eintragen.
+    mem_limit: 1g
+    memswap_limit: 2g
+    labels:
+      - "autoheal=true"
+    ports:
+      # Nur das Host-Mapping traegt den veroeffentlichten Port; im Container bleibt es bei 8080
+      # (siehe Dockerfile). Die Zahl steht hier als Default, weil sie in dieser Datei nachlesbar
+      # bleiben muss — der Nachbarbelegung wegen (8080 mbox, 8081 romm, 8200 DLNA) ist 8082 die
+      # richtige Wahl. NUTRITRACK_PORT hebt sie auf: scripts/deploy.sh reicht denselben Wert
+      # durch, mit dem es danach /api/health prueft, sonst prueft das Skript einen anderen Port,
+      # als der Stapel veroeffentlicht.
+      - "${NUTRITRACK_PORT:-8082}:8080"
+    volumes:
+      # Datenwurzel als Bind-Mount auf die SSD, analog zu mbox' /mnt/ssd/mbox. Hier liegt die
+      # SQLite-Datei mitsamt ihren -wal/-shm-Begleitern. Das Verzeichnis muss dem Benutzer gehoeren,
+      # unter dem der Container laeuft (das Abbild laeuft ohne USER-Zeile als root, also genuegt
+      # `mkdir -p /mnt/ssd/nutritrack`) — sonst faellt SQLITE_READONLY erst beim ersten Schreiben
+      # auf, nicht beim Start. Ein Backup darf die Datei NICHT einfach kopieren: `VACUUM INTO`
+      # benutzen, sonst faengt man einen halben WAL mit ein.
+      - /mnt/ssd/nutritrack:/data
+    environment:
+      - NUTRITRACK_DATA_ROOT=/data
+      # ASP.NET liest Umgebungsvariablen mit __ als Ebenentrenner direkt in die Konfiguration;
+      # diese Namen brauchen also KEINE Zeile Code in Program.cs. In der .env stehen sie unter
+      # sprechenden NUTRITRACK_-Namen, damit dort erkennbar bleibt, wozu sie gehoeren.
+      #
+      # Die SQLite-Datei liegt im Bind-Mount. "Default Timeout=30": SQLite hat genau EINEN
+      # Schreiber, und Identity schreibt schon bei jedem fehlgeschlagenen Login (Lockout-Zaehler).
+      # Ohne Wartezeit quittiert der zweite gleichzeitige Schreiber sofort mit "database is locked".
+      - ConnectionStrings__DefaultConnection=${NUTRITRACK_CONNECTION_STRING:-Data Source=/data/nutritrack.db;Foreign Keys=True;Default Timeout=30}
+      # Ohne Schluessel bricht compose hier ab, und das ist Absicht: jeder Wert, der im Repo
+      # stehen wuerde (Default oder Platzhalter), ist oeffentlich — mit ihm kann jeder gueltige
+      # Tokens fuer fremde Konten signieren. Lieber gar nicht starten als unbemerkt offen stehen.
+      # Deshalb steht in .env.example bewusst ein LEERER Wert: nur so greift diese `:?`-Pruefung.
+      - Jwt__Key=${NUTRITRACK_JWT_KEY:?NUTRITRACK_JWT_KEY fehlt — .env neben dieser Datei anlegen, Vorlage ist .env.example}
+      - Jwt__Issuer=${NUTRITRACK_JWT_ISSUER:-NutriTrack}
+      - Jwt__Audience=${NUTRITRACK_JWT_AUDIENCE:-NutriTrack}
+      # Cors:Origins ist im Code ein string[]; ueber Env adressiert man Arrays mit dem Index.
+      # Im Normalfall ist das wirkungslos, weil die SPA vom selben Origin kommt — es zaehlt nur
+      # fuer einen Vite-Dev-Server, der gegen diesen Container spricht. Weitere Eintraege als
+      # Cors__Origins__1, __2 ergaenzen.
+      - Cors__Origins__0=${NUTRITRACK_CORS_ORIGIN:-http://192.168.188.96:8082}
+      - TZ=Europe/Berlin
+      - DOTNET_gcServer=0
+    healthcheck:
+      # Derselbe Check wie im Dockerfile, hier in CMD-Exec-Form. Doppelt, weil compose den Wert
+      # des Abbilds sonst stillschweigend uebernimmt und man beim Lesen dieser Datei nicht saehe,
+      # wie streng der Container ueberwacht wird. WEIL compose gewinnt, MUSS diese Zeile Wort fuer
+      # Wort dasselbe tun wie die HEALTHCHECK-Zeile im Dockerfile — sonst testet der Betrieb etwas
+      # anderes als das Abbild.
+      # `-qO-` holt den Body, ist also ein echtes GET. `--spider` (HEAD) wuerde inzwischen zwar
+      # auch gehen — Program.cs registriert /api/health mit MapMethods fuer GET UND HEAD —, bringt
+      # hier aber nichts: der Status ist bei beiden derselbe, und der Body ist die einzige Stelle,
+      # an der beim Nachsehen von Hand ablesbar ist, WARUM der Check faellt ("Database":
+      # "unreachable"). Bei einem 503 quittiert wget mit Exit 8, der Versuch zaehlt als Fehlschlag.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 15                   # tolerant (~7,5 min): I/O-Stalls duerfen keinen autoheal-Loop ausloesen
+      start_period: 120s

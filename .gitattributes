@@ -1,0 +1,9 @@
+# Zeilenenden verbindlich festlegen. Beide Repos werden auf Windows (core.autocrlf=true)
+# bearbeitet und auf einem Ubuntu-Rechner ausgecheckt und gebaut. Ohne diese Datei bekaeme
+# scripts/deploy.sh dort CRLF und scheiterte mit "bad interpreter: No such file or directory";
+# dasselbe gilt fuer alles, was im Container als Skript oder Konfiguration gelesen wird.
+* text=auto
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+.env.example text eol=lf

@@ -9,6 +9,23 @@ namespace NutriTrack.Api.Services;
 
 public class TokenService(IConfiguration configuration)
 {
+    /// <summary>
+    /// Traegt den Identity-SecurityStamp des Nutzers. Er ist der einzige Hebel, mit dem ein
+    /// bereits ausgestelltes Token vorzeitig entwertet werden kann: JWTs sind zustandslos, es
+    /// gibt weder Sperrliste noch Sitzung. Program.cs prueft den Wert bei JEDEM Request gegen
+    /// die Datenbank (JwtBearerEvents.OnTokenValidated); dreht Identity den Stempel weiter
+    /// (Logout, Passwortwechsel, UserManager.UpdateSecurityStampAsync), sind alle aelteren
+    /// Tokens dieses Nutzers sofort ungueltig.
+    /// </summary>
+    public const string SecurityStampClaimType = "security_stamp";
+
+    /// <summary>
+    /// Gueltigkeitsdauer in Stunden. Frueher fest 7 Tage - ein abgegriffenes Token (fremder
+    /// Browser, XSS, localStorage) war damit eine Woche lang brauchbar. Ueber
+    /// NUTRITRACK_Jwt__TokenLifetimeHours anpassbar, falls der Betrieb es anders braucht.
+    /// </summary>
+    private const int DefaultTokenLifetimeHours = 12;
+
     public AuthResponse GenerateToken(IdentityUser user)
     {
         var key = new SymmetricSecurityKey(
@@ -18,10 +35,15 @@ public class TokenService(IConfiguration configuration)
         {
             new(ClaimTypes.NameIdentifier, user.Id),
             new(ClaimTypes.Email, user.Email!),
-            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+            new(SecurityStampClaimType, user.SecurityStamp ?? string.Empty)
         };
 
-        var expiresAt = DateTime.UtcNow.AddDays(7);
+        var lifetimeHours = int.TryParse(configuration["Jwt:TokenLifetimeHours"], out var configured) && configured > 0
+            ? configured
+            : DefaultTokenLifetimeHours;
+
+        var expiresAt = DateTime.UtcNow.AddHours(lifetimeHours);
 
         var token = new JwtSecurityToken(
             issuer: configuration["Jwt:Issuer"],

@@ -1,0 +1,60 @@
+# QUELLE DIESER DATEI, ABER NICHT IHR WIRKORT: BuildKit liest .dockerignore aus der WURZEL DES
+# BUILD-KONTEXTS, und der Kontext ist hier das Elternverzeichnis beider Repos. scripts/deploy.sh
+# kopiert diese Datei vor jedem Bauen nach $NUTRITRACK_ROOT/.dockerignore. Gepflegt wird sie hier,
+# weil nur das Api-Repo versioniert ist — das Elternverzeichnis auf dem Ziel ist ein blosser Ordner.
+#
+# Alle Pfade tragen deshalb den Repo-Namen als Praefix.
+
+# --- Oberflaeche ---
+# node_modules ist der teuerste Posten von allen: ohne diese Zeile schiebt der Client zehntausende
+# Dateien in den Daemon, bevor ueberhaupt etwas gebaut wird. Das Abbild bekommt seine Pakete
+# ohnehin ueber `npm ci` in der Frontend-Stufe.
+NutriTrack.Web/node_modules
+NutriTrack.Web/dist
+NutriTrack.Web/.git
+
+# --- API ---
+NutriTrack.Api/**/bin
+NutriTrack.Api/**/obj
+NutriTrack.Api/.git
+
+# --- Beide .env (das Wichtigste hier) ---
+# NutriTrack.Api/.env traegt auf dem Ziel den JWT-Signaturschluessel, und sie liegt NEBEN der
+# compose-Datei, also mitten im Kontext. Ohne diese Zeilen kopiert `COPY NutriTrack.Api/ .` sie in
+# die Bau-Stufe; dort bleibt sie in einem Zwischenlayer stehen und ist mit `docker history` bzw.
+# einem `docker save` des Bau-Abbilds auslesbar, auch wenn das Laufzeitabbild sie nicht enthaelt.
+# Der Prozess braucht sie ohnehin nicht aus dem Abbild: compose reicht die Werte zur LAUFZEIT als
+# Umgebungsvariablen hinein.
+# NutriTrack.Web/.env haelt zusaetzlich Vite davon ab, beim Bauen eine Entwickler-URL ins Bundle
+# zu backen.
+# `.env.*` deckt .env.local, .env.production und Konsorten mit ab; .env.example ist die bewusste
+# Ausnahme — sie ist reine Dokumentation ohne Werte und darf mit.
+NutriTrack.Api/.env
+NutriTrack.Api/.env.*
+NutriTrack.Web/.env
+NutriTrack.Web/.env.*
+!NutriTrack.Api/.env.example
+!NutriTrack.Web/.env.example
+
+# --- Beides ---
+# SQLite-Dateien aus lokalen Laeufen: sie wuerden im Abbild landen und dort die echte Datenbank
+# im Bind-Mount nicht ueberschreiben, aber Groesse und Verwirrung kosten.
+**/*.db
+**/*.db-wal
+**/*.db-shm
+# Lokale Datenwurzel aus `dotnet run` (Default ./data). NICHT als `**/data` schreiben: der
+# Infrastructure-Ordner heisst Data/, und die Musterpruefung ist unter Linux zwar
+# gross-/kleinschreibungsabhaengig, aber die Verwechslung ist zu billig zu vermeiden.
+NutriTrack.Api/data
+NutriTrack.Api/docs
+NutriTrack.Web/docs
+# Weitere Traeger von Geheimnissen, die neben der .env stehen koennen und dieselbe Layer-Spur
+# hinterlassen wuerden: lokale Konfigurationsueberschreibungen und Zertifikate. Beides ist in den
+# .gitignore-Dateien beider Repos schon ausgenommen, taucht aber trotzdem im Kontext auf, sobald
+# es jemand lokal anlegt — der Kontext kennt Git nicht.
+**/appsettings.*.local.json
+**/*.pfx
+# Reine Werkzeugspuren: kosten nur Uebertragungszeit, tragen nichts zum Abbild bei.
+**/.vs
+**/.idea
+**/.vscode

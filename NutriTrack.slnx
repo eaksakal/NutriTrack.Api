@@ -4,4 +4,7 @@
     <Project Path="src/NutriTrack.Domain/NutriTrack.Domain.csproj" />
     <Project Path="src/NutriTrack.Infrastructure/NutriTrack.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NutriTrack.Api.Tests/NutriTrack.Api.Tests.csproj" />
+  </Folder>
 </Solution>

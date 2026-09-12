@@ -25,7 +25,10 @@ public class CreateMealEntryRequest
     public decimal? Iron { get; set; }
     public decimal? Potassium { get; set; }
 
-    [Range(0.1, 10000)]
+    // ACHTUNG: Minimal APIs werten diese Attribute nur mit builder.Services.AddValidation() aus,
+    // das hier bewusst nicht registriert ist. Sie dokumentieren die Regel; DURCHGESETZT wird sie
+    // im Handler (MealEndpoints.IsValidQuantity) - beide Stellen muessen dasselbe sagen.
+    [Range(0, 10000, MinimumIsExclusive = true)]
     public decimal QuantityInGrams { get; set; }
 
     [Required]

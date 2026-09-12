@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
 using NutriTrack.Api.Contracts.Auth;
@@ -16,6 +17,17 @@ public static class AuthEndpoints
             UserManager<IdentityUser> userManager,
             TokenService tokenService) =>
         {
+            // Minimal APIs werten die DataAnnotations des RegisterRequest nicht von selbst aus.
+            // Ohne diese ausdrueckliche Pruefung entsteht ein Konto mit ungueltiger E-Mail oder mit
+            // ConfirmPassword != Password; von den Annotationen greift faktisch nur MinLength(8),
+            // und auch das nur zufaellig ueber die Passwortpolicy von Identity.
+            // Die Fehlerform ist bewusst dieselbe wie bei den Identity-Fehlern unten ("errors" als
+            // Array), damit das Frontend nur einen Fall auswerten muss.
+            var validationResults = new List<ValidationResult>();
+            if (!Validator.TryValidateObject(
+                    request, new ValidationContext(request), validationResults, validateAllProperties: true))
+                return Results.BadRequest(new { Errors = validationResults.Select(r => r.ErrorMessage) });
+
             var existingUser = await userManager.FindByEmailAsync(request.Email);
             if (existingUser is not null)
                 return Results.Conflict(new { Error = "A user with this email already exists." });
@@ -51,6 +63,27 @@ public static class AuthEndpoints
             var response = tokenService.GenerateToken(user);
             return Results.Ok(response);
         });
+
+        // Ohne diesen Endpunkt gibt es serverseitig keinen einzigen Handgriff, um ein
+        // ausgestelltes Token zu entwerten: Abmelden im Browser loescht nur den localStorage,
+        // das Token selbst bliebe bis zum Ablauf gueltig. UpdateSecurityStampAsync dreht den
+        // Stempel weiter, den Program.cs bei jedem Request gegen das Token prueft - damit sind
+        // ALLE Tokens dieses Nutzers sofort ungueltig, auch die auf anderen Geraeten. Genau das
+        // will man, wenn man abmeldet, weil das Token in fremde Haende geraten sein koennte.
+        group.MapPost("/logout", async (ClaimsPrincipal principal, UserManager<IdentityUser> userManager) =>
+        {
+            var userId = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (userId is null)
+                return Results.Unauthorized();
+
+            var user = await userManager.FindByIdAsync(userId);
+            if (user is null)
+                return Results.NoContent();
+
+            await userManager.UpdateSecurityStampAsync(user);
+
+            return Results.NoContent();
+        }).RequireAuthorization();
 
         group.MapGet("/me", (ClaimsPrincipal user) =>
         {
