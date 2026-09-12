@@ -21,7 +21,7 @@ builder.Configuration.AddEnvironmentVariables("NUTRITRACK_");
 // ---------------------------------------------------------------------------------------
 // Datenwurzel und Datenbankdatei
 // ---------------------------------------------------------------------------------------
-// Im Container ist /data ein Bind-Mount auf /mnt/ssd/nutritrack, lokal reicht ./data neben
+// Im Container ist /data ein Bind-Mount (siehe docker-compose.yml), lokal reicht ./data neben
 // dem ContentRoot. Bewusst eine eigene Variable statt eines fertigen Connection-Strings:
 // der Betrieb soll einen Ordner angeben, keinen SQLite-Dialekt kennen muessen.
 var dataRoot = Environment.GetEnvironmentVariable("NUTRITRACK_DATA_ROOT") is { Length: > 0 } configuredRoot

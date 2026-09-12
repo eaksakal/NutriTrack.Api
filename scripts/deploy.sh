@@ -20,6 +20,8 @@
 #   NUTRITRACK_HOST=eaksakal@192.168.188.96 scripts/deploy.sh
 #   NUTRITRACK_BRANCH=feature/goals scripts/deploy.sh
 #   NUTRITRACK_PORT=9082 scripts/deploy.sh          # veroeffentlichter Port, Default 8082
+#   NUTRITRACK_DATA_DIR=/srv/nutritrack scripts/deploy.sh   # Datenwurzel am Ziel,
+#                                                   # Default /home/eaksakal/nutritrack-data
 set -euo pipefail
 
 HOST="${NUTRITRACK_HOST:-eaksakal@192.168.188.96}"
@@ -44,6 +46,17 @@ PORT="${NUTRITRACK_PORT:-}"
 PORT_ENV=""
 if [ -n "$PORT" ]; then
   PORT_ENV="NUTRITRACK_PORT='$PORT' "
+fi
+
+# Datenwurzel auf dem Ziel. Aus demselben Grund wie NUTRITRACK_PORT ohne Default an dieser Stelle:
+# gesetzt, schlaegt sie die .env des Ziels; ungesetzt entscheidet allein die compose-Datei
+# (Default /home/eaksakal/nutritrack-data). Muss BEIDE Wege erreichen — den Vorbereitungsblock
+# unten, der das Verzeichnis anlegt, UND compose, das es einhaengt. Nur eines von beiden zu
+# versorgen hiesse, dass compose an einem anderen Pfad mountet als der, den das Skript geprueft hat.
+DATA_DIR="${NUTRITRACK_DATA_DIR:-}"
+DATA_ENV=""
+if [ -n "$DATA_DIR" ]; then
+  DATA_ENV="NUTRITRACK_DATA_DIR='$DATA_DIR' "
 fi
 
 # Das Skript liegt in <Api-Repo>/scripts; das Web-Repo ist sein Geschwister auf dem Entwicklerrechner.
@@ -75,7 +88,7 @@ echo "==> [2/4] $HOST vorbereiten und auf origin/$BRANCH ziehen"
 # Der ganze Block laeuft als EIN entferntes Skript (bash -s), damit die Anfuehrungszeichen nicht
 # durch drei Ebenen Shell-Zitierung muessen. Die drei Werte gehen als Umgebungsvariablen hinein.
 ssh -o BatchMode=yes "$HOST" \
-  "ROOT='$ROOT' BRANCH='$BRANCH' API_URL='$API_URL' WEB_URL='$WEB_URL' bash -s" <<'REMOTE'
+  "ROOT='$ROOT' BRANCH='$BRANCH' API_URL='$API_URL' WEB_URL='$WEB_URL' ${DATA_ENV}bash -s" <<'REMOTE'
 set -euo pipefail
 mkdir -p "$ROOT"
 
@@ -108,15 +121,19 @@ if [ ! -f "$ROOT/NutriTrack.Api/.env" ]; then
   exit 1
 fi
 
-# Datenwurzel auf der SSD. Gehoert sie dem falschen Benutzer, meldet SQLite erst beim ersten
-# Schreiben SQLITE_READONLY — der Container waere bis dahin "gesund".
-if [ ! -d /mnt/ssd/nutritrack ]; then
-  mkdir -p /mnt/ssd/nutritrack 2>/dev/null || {
-    echo "FEHLER: /mnt/ssd/nutritrack fehlt und liess sich nicht anlegen." >&2
-    echo "        Einmalig von Hand: sudo mkdir -p /mnt/ssd/nutritrack && sudo chown \$USER /mnt/ssd/nutritrack" >&2
+# Datenwurzel. Liegt bewusst NEBEN dem Build-Kontext ($ROOT), nicht darin: sonst zoege jedes
+# `up --build` die SQLite-Datei mit den Passwort-Hashes in einen Image-Layer.
+# Gehoert sie dem falschen Benutzer, meldet SQLite erst beim ersten Schreiben SQLITE_READONLY —
+# der Container waere bis dahin "gesund".
+DATA_DIR="${NUTRITRACK_DATA_DIR:-/home/eaksakal/nutritrack-data}"
+if [ ! -d "$DATA_DIR" ]; then
+  mkdir -p "$DATA_DIR" 2>/dev/null || {
+    echo "FEHLER: $DATA_DIR fehlt und liess sich nicht anlegen." >&2
+    echo "        Einmalig von Hand: sudo mkdir -p '$DATA_DIR' && sudo chown \$USER '$DATA_DIR'" >&2
     exit 1
   }
 fi
+echo "    Datenwurzel      $DATA_DIR"
 REMOTE
 
 echo "==> [3/4] Bauen und starten (Version $APP_VERSION)"
@@ -124,10 +141,10 @@ echo "==> [3/4] Bauen und starten (Version $APP_VERSION)"
 # falls gesetzt, in der compose-Datei das Host-Mapping. Alle uebrigen Werte zieht compose aus der
 # .env neben der compose-Datei auf dem Ziel.
 ssh -o BatchMode=yes "$HOST" \
-  "cd '$ROOT/NutriTrack.Api' && APP_VERSION='$APP_VERSION' ${PORT_ENV}docker compose up -d --build"
+  "cd '$ROOT/NutriTrack.Api' && APP_VERSION='$APP_VERSION' ${PORT_ENV}${DATA_ENV}docker compose up -d --build"
 
 echo "==> [4/4] Nachsehen"
-ssh -o BatchMode=yes "$HOST" "cd '$ROOT/NutriTrack.Api' && ${PORT_ENV}docker compose ps"
+ssh -o BatchMode=yes "$HOST" "cd '$ROOT/NutriTrack.Api' && ${PORT_ENV}${DATA_ENV}docker compose ps"
 
 # Den veroeffentlichten Port NICHT noch einmal hinschreiben, sondern den laufenden Stapel fragen:
 # `docker compose port` gibt das tatsaechliche Mapping als host:port zurueck. Damit kann die Pruefung
@@ -137,7 +154,7 @@ ssh -o BatchMode=yes "$HOST" "cd '$ROOT/NutriTrack.Api' && ${PORT_ENV}docker com
 # `|| true`: laeuft der Container nicht, quittiert compose mit einem Fehler — unter `set -e` waere
 # das Skript hier zu Ende, bevor es den Hinweis auf `docker compose logs` ueberhaupt ausgeben kann.
 MAPPING="$(ssh -o BatchMode=yes "$HOST" \
-  "cd '$ROOT/NutriTrack.Api' && ${PORT_ENV}docker compose port nutritrack 8080" 2>/dev/null | tr -d '\r' || true)"
+  "cd '$ROOT/NutriTrack.Api' && ${PORT_ENV}${DATA_ENV}docker compose port nutritrack 8080" 2>/dev/null | tr -d '\r' || true)"
 PORT="${MAPPING##*:}"
 if [ -z "$PORT" ]; then
   echo "    WARNUNG: veroeffentlichter Port nicht ermittelbar (laeuft der Container?) — nehme 8082." >&2

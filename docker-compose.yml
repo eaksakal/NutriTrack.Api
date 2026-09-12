@@ -43,13 +43,18 @@ services:
       # als der Stapel veroeffentlicht.
       - "${NUTRITRACK_PORT:-8082}:8080"
     volumes:
-      # Datenwurzel als Bind-Mount auf die SSD, analog zu mbox' /mnt/ssd/mbox. Hier liegt die
-      # SQLite-Datei mitsamt ihren -wal/-shm-Begleitern. Das Verzeichnis muss dem Benutzer gehoeren,
-      # unter dem der Container laeuft (das Abbild laeuft ohne USER-Zeile als root, also genuegt
-      # `mkdir -p /mnt/ssd/nutritrack`) — sonst faellt SQLITE_READONLY erst beim ersten Schreiben
-      # auf, nicht beim Start. Ein Backup darf die Datei NICHT einfach kopieren: `VACUUM INTO`
-      # benutzen, sonst faengt man einen halben WAL mit ein.
-      - /mnt/ssd/nutritrack:/data
+      # Datenwurzel als Bind-Mount. Hier liegt die SQLite-Datei mitsamt ihren -wal/-shm-Begleitern.
+      #
+      # BEWUSST NICHT auf der SSD (/mnt/ssd), wo mbox liegt, und bewusst NICHT unterhalb von
+      # /home/eaksakal/nutritrack: jenes Verzeichnis ist der Docker-Build-Kontext, die Datenbank
+      # mit den Passwort-Hashes wanderte sonst bei jedem Bauen in einen Image-Layer. / hat 828 GB
+      # frei und der Bedarf ist winzig — ein Mahlzeiten-Eintrag sind rund 200 Byte.
+      #
+      # Das Verzeichnis muss dem Benutzer gehoeren, unter dem der Container laeuft (das Abbild
+      # laeuft ohne USER-Zeile als root, also genuegt ein `mkdir -p`) — sonst faellt
+      # SQLITE_READONLY erst beim ersten Schreiben auf, nicht beim Start. Ein Backup darf die
+      # Datei NICHT einfach kopieren: `VACUUM INTO` benutzen, sonst faengt man einen halben WAL mit ein.
+      - ${NUTRITRACK_DATA_DIR:-/home/eaksakal/nutritrack-data}:/data
     environment:
       - NUTRITRACK_DATA_ROOT=/data
       # ASP.NET liest Umgebungsvariablen mit __ als Ebenentrenner direkt in die Konfiguration;
