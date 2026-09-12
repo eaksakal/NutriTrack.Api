@@ -46,6 +46,7 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
           "items": [
             { "searchTerm": "Haferflocken", "label": "Haferflocken",
               "quantityInGrams": 80, "mealType": "Breakfast",
+              "productKind": "branded",
               "estimate": { "calories": 350, "protein": 12, "carbohydrates": 60, "fat": 6 } }
           ]
         }
@@ -80,6 +81,7 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
           "items": [
             { "searchTerm": "{{StubOpenFoodFactsHandler.UnknownSearchTerm}}",
               "label": "Omas Linsensuppe", "quantityInGrams": 350, "mealType": "Lunch",
+              "productKind": "branded",
               "estimate": { "calories": 92, "protein": 5.4, "carbohydrates": 12.1, "fat": 2.3 } }
           ]
         }
@@ -127,6 +129,7 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
         var items = string.Join(",", Enumerable.Range(0, 25).Select(i => $$"""
         { "searchTerm": "{{StubOpenFoodFactsHandler.UnknownSearchTerm}}", "label": "Posten {{i}}",
           "quantityInGrams": 10, "mealType": "Snack",
+          "productKind": "branded",
           "estimate": { "calories": 10, "protein": 1, "carbohydrates": 1, "fat": 1 } }
         """));
 
@@ -220,6 +223,7 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
         {
           "items": [
             { "searchTerm": "Apfel", "label": "Apfel", "quantityInGrams": 150, "mealType": "Snack",
+              "productKind": "branded",
               "estimate": { "calories": 52, "protein": 0.3, "carbohydrates": 14, "fat": 0.2 } }
           ]
         }
@@ -287,12 +291,15 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
           "items": [
             { "searchTerm": "Broetchen", "label": "Broetchen", "quantityInGrams": 60,
               "mealType": "Breakfast",
+              "productKind": "branded",
               "estimate": { "calories": 265, "protein": 9, "carbohydrates": 49, "fat": 3.2 } },
             { "searchTerm": "broetchen", "label": "Noch ein Broetchen", "quantityInGrams": 60,
               "mealType": "Breakfast",
+              "productKind": "branded",
               "estimate": { "calories": 265, "protein": 9, "carbohydrates": 49, "fat": 3.2 } },
             { "searchTerm": "Butter", "label": "Butter", "quantityInGrams": 10,
               "mealType": "Breakfast",
+              "productKind": "branded",
               "estimate": { "calories": 717, "protein": 0.9, "carbohydrates": 0.1, "fat": 81 } }
           ]
         }
@@ -332,6 +339,7 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
         string Posten(string term) => $$"""
             { "searchTerm": "{{term}}", "label": "{{term}}", "quantityInGrams": 50,
               "mealType": "Snack",
+              "productKind": "branded",
               "estimate": { "calories": 100, "protein": 1, "carbohydrates": 2, "fat": 3 } }
             """;
 
@@ -385,6 +393,7 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
           "items": [
             { "searchTerm": "Kaffee", "label": "Kaffee", "quantityInGrams": 200,
               "mealType": "Breakfast",
+              "productKind": "branded",
               "estimate": { "calories": 2, "protein": 0.1, "carbohydrates": 0, "fat": 0 } }
           ]
         }
@@ -406,6 +415,162 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
         // Fuenf Anfragen, EIN Aufruf beim Fremddienst. Ohne Zwischenspeicher waeren nach sechs
         // Eingaben dieser Art bereits mehr als die Haelfte des Minutenkontingents verbraucht.
         Assert.Equal(1, suchen);
+    }
+
+    /// <summary>
+    /// Der Fall, der die Umstellung ausgeloest hat (gemessen am 2026-09-12): eine Produktdatenbank
+    /// kennt zu "Spaghetti" nur TROCKENE Nudeln mit rund 360 kcal je 100 g. Gekochte haben etwa
+    /// 150. Ein Treffer daraus haette den Tageswert still verdoppelt - also wird fuer
+    /// Selbstgekochtes gar nicht erst gefragt.
+    /// </summary>
+    [Fact]
+    public async Task ParseMeal_WithHomeCookedDish_NeverQueriesTheProductDatabase()
+    {
+        using var isolated = new NutriTrackApiFactory();
+        await isolated.ResetDatabaseAsync();
+
+        var suchen = 0;
+        isolated.OpenFoodFactsResponder = request =>
+        {
+            if (request.RequestUri!.ToString().Contains("/cgi/search.pl", StringComparison.Ordinal))
+                Interlocked.Increment(ref suchen);
+
+            return null;
+        };
+
+        isolated.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        {
+          "items": [
+            { "searchTerm": "Spaghetti gekocht", "label": "Spaghetti (gekocht)",
+              "quantityInGrams": 250, "mealType": "Dinner", "productKind": "generic",
+              "estimate": { "calories": 150, "protein": 5.5, "carbohydrates": 30, "fat": 0.9 } },
+            { "searchTerm": "Bolognese Sauce", "label": "Bolognese Sauce",
+              "quantityInGrams": 200, "mealType": "Dinner", "productKind": "generic",
+              "estimate": { "calories": 120, "protein": 7, "carbohydrates": 6, "fat": 7.5 } }
+          ]
+        }
+        """);
+
+        var (client, _, _) = await isolated.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "Spaghetti Bolognese" } }
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var parsed = await response.Content.ReadFromJsonAsync<ParseMealResponseDto>();
+
+        Assert.Equal(0, suchen);
+        Assert.Equal(2, parsed!.Items.Count);
+        Assert.All(parsed.Items, item =>
+        {
+            Assert.Equal("generic", item.Source);
+            Assert.Empty(item.Candidates);
+            Assert.NotNull(item.Estimate);
+        });
+        // 150 kcal je 100 g fuer gekochte Nudeln - nicht der Trockenwert von rund 360.
+        Assert.Equal(150m, parsed.Items[0].Estimate!.Calories);
+    }
+
+    [Fact]
+    public async Task ParseMeal_WithBrandedProduct_QueriesTheProductDatabase()
+    {
+        using var isolated = new NutriTrackApiFactory();
+        await isolated.ResetDatabaseAsync();
+
+        isolated.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        {
+          "items": [
+            { "searchTerm": "Haferflocken", "label": "Kölln Zarte Haferflocken",
+              "quantityInGrams": 80, "mealType": "Breakfast", "productKind": "branded",
+              "estimate": { "calories": 350, "protein": 12, "carbohydrates": 60, "fat": 6 } }
+          ]
+        }
+        """);
+
+        var (client, _, _) = await isolated.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "80 g Kölln Zarte Haferflocken" } }
+        });
+
+        var parsed = await response.Content.ReadFromJsonAsync<ParseMealResponseDto>();
+        var item = Assert.Single(parsed!.Items);
+
+        Assert.Equal("openfoodfacts", item.Source);
+        Assert.NotEmpty(item.Candidates);
+    }
+
+    /// <summary>
+    /// Markenprodukt gefragt, Datenbank hat nichts: DAS ist ein Rueckfall und heisst deshalb
+    /// "estimate" - im Unterschied zu "generic", wo wir bewusst gar nicht erst fragen.
+    /// </summary>
+    [Fact]
+    public async Task ParseMeal_WithBrandedProductAndNoHit_ReportsEstimateNotGeneric()
+    {
+        using var isolated = new NutriTrackApiFactory();
+        await isolated.ResetDatabaseAsync();
+
+        isolated.GeminiResponder = _ => StubGeminiHandler.Payload($$"""
+        {
+          "items": [
+            { "searchTerm": "{{StubOpenFoodFactsHandler.UnknownSearchTerm}}",
+              "label": "Sehr seltene Marke", "quantityInGrams": 100, "mealType": "Snack",
+              "productKind": "branded",
+              "estimate": { "calories": 200, "protein": 5, "carbohydrates": 20, "fat": 10 } }
+          ]
+        }
+        """);
+
+        var (client, _, _) = await isolated.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "irgendein Nischenprodukt" } }
+        });
+
+        var parsed = await response.Content.ReadFromJsonAsync<ParseMealResponseDto>();
+        Assert.Equal("estimate", Assert.Single(parsed!.Items).Source);
+    }
+
+    /// <summary>Fehlt oder spinnt productKind, gilt "generic" - der kleinere Fehler.</summary>
+    [Fact]
+    public async Task ParseMeal_WithUnknownProductKind_TreatsItemAsGeneric()
+    {
+        using var isolated = new NutriTrackApiFactory();
+        await isolated.ResetDatabaseAsync();
+
+        var suchen = 0;
+        isolated.OpenFoodFactsResponder = request =>
+        {
+            if (request.RequestUri!.ToString().Contains("/cgi/search.pl", StringComparison.Ordinal))
+                Interlocked.Increment(ref suchen);
+
+            return null;
+        };
+
+        isolated.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        {
+          "items": [
+            { "searchTerm": "Haferflocken", "label": "Haferflocken", "quantityInGrams": 80,
+              "mealType": "Breakfast", "productKind": "voellig-unbekannt",
+              "estimate": { "calories": 372, "protein": 13, "carbohydrates": 59, "fat": 7 } }
+          ]
+        }
+        """);
+
+        var (client, _, _) = await isolated.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "80 g Haferflocken" } }
+        });
+
+        var parsed = await response.Content.ReadFromJsonAsync<ParseMealResponseDto>();
+        Assert.Equal("generic", Assert.Single(parsed!.Items).Source);
+        Assert.Equal(0, suchen);
     }
 
     /// <summary>Startet dieselbe Anwendung, aber ohne Gemini:ApiKey — fuer den Nachweis, dass ein

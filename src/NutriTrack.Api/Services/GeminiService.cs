@@ -36,6 +36,11 @@ public class GeminiItem
     [JsonPropertyName("mealType")]
     public string MealType { get; set; } = "Snack";
 
+    /// <summary>"branded" oder "generic" - siehe Systemanweisung. Steuert, ob ueberhaupt eine
+    /// Produktdatenbank gefragt wird.</summary>
+    [JsonPropertyName("productKind")]
+    public string ProductKind { get; set; } = "generic";
+
     [JsonPropertyName("estimate")]
     public NutrientEstimate Estimate { get; set; } = new();
 }
@@ -63,7 +68,22 @@ public class GeminiService(HttpClient httpClient, IConfiguration configuration, 
         Fuer jeden Posten lieferst du: searchTerm (kurzer Suchbegriff fuer eine
         Lebensmitteldatenbank, ohne Mengenangabe), label (lesbarer Name), quantityInGrams
         (Menge in Gramm, Fluessigkeiten in Milliliter gleich Gramm), mealType (genau einer von
-        Breakfast, Lunch, Dinner, Snack) und estimate (geschaetzte Naehrwerte je 100 g).
+        Breakfast, Lunch, Dinner, Snack), productKind und estimate (Naehrwerte je 100 g).
+
+        productKind entscheidet, woher die Naehrwerte am Ende kommen:
+          "branded"  Ein gekauftes, verpacktes Produkt, das der Nutzer benennbar gemacht hat -
+                     eine Marke ("Koelln Zarte Haferflocken", "Alpro Sojadrink"), ein
+                     Fertiggericht oder ein Barcode. Nur dann wird eine Produktdatenbank gefragt.
+          "generic"  Alles andere: ein Grundnahrungsmittel ohne Marke ("eine Banane", "Magerquark")
+                     und jedes selbst gekochte oder zubereitete Gericht ("Spaghetti Bolognese",
+                     "Linsensuppe", "Ruehrei"). Hier zaehlt DEIN Wert, nicht die Datenbank.
+        Im Zweifel "generic". Eine Produktdatenbank kennt fuer "Spaghetti" nur TROCKENE Nudeln
+        (etwa 360 kcal je 100 g); gekochte haben etwa 150. Ein falsches "branded" macht daraus
+        den doppelten Wert.
+
+        Zubereitungszustand gehoert in label UND in estimate: "Spaghetti (gekocht)" mit etwa
+        150 kcal je 100 g, nicht der Trockenwert. Dasselbe gilt fuer Reis, Nudeln und
+        Huelsenfruechte.
         Die Einheiten in estimate sind bindend und beziehen sich IMMER auf 100 g des
         Lebensmittels:
           calories       Kilokalorien (kcal) je 100 g
@@ -80,6 +100,13 @@ public class GeminiService(HttpClient httpClient, IConfiguration configuration, 
         Fehlt eine Angabe, die den Naehrwert deutlich veraendert, stelle GENAU EINE kurze
         Rueckfrage im Feld question und lasse items leer. Bei Kleinigkeiten nimm den ueblichen
         Wert an, statt nachzufragen.
+        Ausdruecklich nachfragen musst du bei unbestimmten Mengenangaben zu einer vollstaendigen
+        Mahlzeit - "grosse Portion", "eine Schuessel", "ein Teller", "viel", "wenig". Bei diesen
+        Formulierungen liegen zwischen zwei plausiblen Annahmen leicht 300 kcal, und das ist die
+        groesste Fehlerquelle ueberhaupt. Eine Zahl zu raten, die der Nutzer in zwei Sekunden
+        haette nennen koennen, ist der schlechtere Weg.
+        Nenne in der Rueckfrage ruhig eine Groessenordnung zur Auswahl, damit sie leicht zu
+        beantworten ist.
         Antworte ausschliesslich im vorgegebenen Schema.
         """;
 
@@ -175,6 +202,9 @@ public class GeminiService(HttpClient httpClient, IConfiguration configuration, 
         foreach (var item in result.Items)
         {
             item.MealType = NormalizeMealType(item.MealType);
+            // Unbekanntes wird "generic": lieber der eigene Standardwert als ein zufaelliges
+            // Markenprodukt aus der Datenbank. Der Fehler faellt dann kleiner aus.
+            item.ProductKind = item.ProductKind?.Trim().ToLowerInvariant() == "branded" ? "branded" : "generic";
             NormalizeEstimate(item, logger);
         }
 
@@ -372,6 +402,14 @@ public class GeminiService(HttpClient httpClient, IConfiguration configuration, 
                             type = "string",
                             @enum = new[] { "Breakfast", "Lunch", "Dinner", "Snack" }
                         },
+                        productKind = new
+                        {
+                            type = "string",
+                            @enum = new[] { "generic", "branded" },
+                            description = "branded nur bei benannter Marke, Fertiggericht oder "
+                                          + "Barcode; generic bei Grundnahrungsmitteln und allem "
+                                          + "selbst Gekochten."
+                        },
                         // Die Einheit gehoert in das Schema, nicht nur in den Anweisungstext: das
                         // Schema reist bei jeder Anfrage unveraendert mit und ist die Stelle, an
                         // der das Modell die Felder zuordnet. Natrium in Gramm ist dabei der
@@ -398,7 +436,7 @@ public class GeminiService(HttpClient httpClient, IConfiguration configuration, 
                             required = new[] { "calories", "protein", "carbohydrates", "fat" }
                         }
                     },
-                    required = new[] { "searchTerm", "label", "quantityInGrams", "mealType", "estimate" }
+                    required = new[] { "searchTerm", "label", "quantityInGrams", "mealType", "productKind", "estimate" }
                 }
             }
         },

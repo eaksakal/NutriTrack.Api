@@ -80,7 +80,15 @@ public class AiMealAssistant(
         // ein Broetchen mit Butter" nennt denselben Begriff mehrfach, und OpenFoodFacts erlaubt
         // nur 10 Suchen je Minute und IP (siehe OpenFoodFactsThrottle). Jede eingesparte Anfrage
         // ist bares Kontingent - und die Antwort ist fuer denselben Begriff ohnehin dieselbe.
+        // NUR Markenprodukte gehen an die Produktdatenbank. Fuer Grundnahrungsmittel und
+        // Selbstgekochtes ist sie die schlechtere Quelle, nicht die bessere: sie enthaelt
+        // Fertiggerichte, Saucen, Gewuerzmischungen und Rohware unter denselben Suchbegriffen
+        // und unterscheidet roh nicht von gekocht. Gemessen am 2026-09-12: "spaghetti bolognese"
+        // lieferte 80 bis 315 kcal je 100 g (darunter ein Gewuerzpulver), "spaghetti" allein
+        // TROCKENE Nudeln mit 359 - gegen 150 fuer gekochte. Ein Treffer daraus haette den
+        // Tageswert still verdoppelt.
         var terms = items
+            .Where(IstMarkenprodukt)
             .Select(NormalizeTerm)
             .Where(term => term.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -141,14 +149,21 @@ public class AiMealAssistant(
 
         foreach (var item in items)
         {
-            var candidates = byTerm.TryGetValue(NormalizeTerm(item), out var found) ? found : [];
+            var markenprodukt = IstMarkenprodukt(item);
+            var candidates = markenprodukt && byTerm.TryGetValue(NormalizeTerm(item), out var found)
+                ? found
+                : [];
 
             response.Items.Add(new ParsedItem
             {
                 Label = item.Label,
                 QuantityInGrams = item.QuantityInGrams,
                 MealType = item.MealType,
-                Source = candidates.Count > 0 ? "openfoodfacts" : "estimate",
+                // "generic" ist kein Rueckfall, sondern die gewaehlte Quelle - deshalb von
+                // "estimate" getrennt, das fuer ein Markenprodukt OHNE Datenbanktreffer steht.
+                Source = candidates.Count > 0 ? "openfoodfacts"
+                       : markenprodukt ? "estimate"
+                       : "generic",
                 Candidates = candidates,
                 Estimate = item.Estimate
             });
@@ -156,6 +171,9 @@ public class AiMealAssistant(
 
         return response;
     }
+
+    private static bool IstMarkenprodukt(GeminiItem item) =>
+        string.Equals(item.ProductKind, "branded", StringComparison.OrdinalIgnoreCase);
 
     private static string NormalizeTerm(GeminiItem item) => NormalizeTerm(item.SearchTerm);
 

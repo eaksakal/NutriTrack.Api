@@ -20,8 +20,17 @@ public class ParsedItem
     public decimal QuantityInGrams { get; set; }
     public string MealType { get; set; } = "Snack";
 
-    /// <summary>"openfoodfacts", wenn Candidates gefuellt ist, sonst "estimate".</summary>
-    public string Source { get; set; } = "estimate";
+    /// <summary>
+    /// Woher die Werte stammen. Drei Zustaende, die bewusst unterschieden werden, weil sie fuer
+    /// den Nutzer Verschiedenes bedeuten:
+    ///   "openfoodfacts"  Treffer in der Produktdatenbank, Candidates ist gefuellt.
+    ///   "generic"        Standardwert fuer ein Grundnahrungsmittel oder ein selbst gekochtes
+    ///                    Gericht. KEIN Rueckfall, sondern die bessere Quelle: die Datenbank
+    ///                    kennt fuer "Spaghetti" nur trockene Nudeln (360 statt 150 kcal je 100 g).
+    ///   "estimate"       Rueckfall. Es war ein Markenprodukt, aber die Datenbank hatte nichts
+    ///                    oder war nicht erreichbar.
+    /// </summary>
+    public string Source { get; set; } = "generic";
 
     public List<FoodSearchResponse> Candidates { get; set; } = [];
 
