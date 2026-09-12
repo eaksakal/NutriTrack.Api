@@ -96,6 +96,22 @@ hole() {   # $1 = Verzeichnisname, $2 = Klon-URL
   if [ -d "$ROOT/$1/.git" ]; then
     git -C "$ROOT/$1" fetch origin --quiet
     git -C "$ROOT/$1" reset --hard "origin/$BRANCH" --quiet
+  elif [ -d "$ROOT/$1" ]; then
+    # Verzeichnis da, aber kein Repo. Das ist KEIN Sonderfall, sondern der Normalfall beim
+    # allerersten Lauf: die .env-Pruefung weiter unten verlangt, dass
+    # $ROOT/NutriTrack.Api/.env VORHER von Hand angelegt wird — und damit existiert das
+    # Verzeichnis, bevor je geklont wurde. `git clone` verweigert es dann mit
+    # "already exists and is not an empty directory".
+    # Deshalb hier von Hand verdrahten statt den Ordner wegzuraeumen: in ihm liegt der
+    # JWT-Signaturschluessel, und den erzeugt niemand versehentlich ein zweites Mal.
+    git -C "$ROOT/$1" init --quiet
+    git -C "$ROOT/$1" remote add origin "$2" 2>/dev/null || git -C "$ROOT/$1" remote set-url origin "$2"
+    git -C "$ROOT/$1" fetch origin --quiet
+    # checkout -B statt reset --hard: benennt den lokalen Zweig gleich richtig, sonst bliebe er
+    # auf dem Default aus `git init` stehen und der naechste Lauf liefe in den Zweig darueber
+    # mit einem Branch, den niemand erwartet. Die untracked .env ueberlebt das, weil sie in der
+    # .gitignore des Repos steht.
+    git -C "$ROOT/$1" checkout -B "$BRANCH" "origin/$BRANCH" --quiet
   else
     git clone --quiet --branch "$BRANCH" "$2" "$ROOT/$1"
   fi
