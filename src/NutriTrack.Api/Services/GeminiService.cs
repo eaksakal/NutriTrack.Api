@@ -16,6 +16,26 @@ public class GeminiQuotaException(string message) : Exception(message);
 /// <summary>Antwort kam an, passt aber nicht zum erzwungenen Schema.</summary>
 public class GeminiMalformedResponseException(string message) : Exception(message);
 
+/// <summary>Wie ein Zielwunsch in Worten zu lesen ist. Mehr braucht der Rechner nicht.</summary>
+public class GeminiWishResult
+{
+    /// <summary>"lose", "hold" oder "gain".</summary>
+    [JsonPropertyName("direction")]
+    public string Direction { get; set; } = "hold";
+
+    /// <summary>Abweichung vom Erhaltungsbedarf in Prozent; der Rechner kappt sie ohnehin.</summary>
+    [JsonPropertyName("intensityPercent")]
+    public decimal? IntensityPercent { get; set; }
+
+    /// <summary>"balanced", "highProtein" oder "lowCarb".</summary>
+    [JsonPropertyName("style")]
+    public string Style { get; set; } = "balanced";
+
+    /// <summary>Ein Satz, wie der Wunsch verstanden wurde - zur Gegenkontrolle durch den Nutzer.</summary>
+    [JsonPropertyName("interpretation")]
+    public string Interpretation { get; set; } = string.Empty;
+}
+
 public class GeminiParseResult
 {
     public string? Question { get; set; }
@@ -118,74 +138,11 @@ public class GeminiService(HttpClient httpClient, IConfiguration configuration, 
         if (string.IsNullOrWhiteSpace(apiKey))
             throw new GeminiUnavailableException("Gemini:ApiKey fehlt.");
 
-        var model = configuration["Gemini:Model"] is { Length: > 0 } configured
-            ? configured
-            : "gemini-3.5-flash";
-
         var transcript = new StringBuilder();
         foreach (var message in messages)
             transcript.AppendLine($"{(message.Role == "assistant" ? "Rueckfrage" : "Nutzer")}: {message.Text}");
 
-        // system_instruction ist ein eigenes Feld der Interactions-API. Die Anweisung dort
-        // unterzubringen statt sie dem Nutzertext voranzustellen, haelt beides sauber getrennt:
-        // der Nutzer kann die Anweisung nicht mit eigenem Text ueberschreiben.
-        // Die Handprobe am 2026-09-12 zeigte 859 "thought"-Token bei 1185 Token gesamt - fast drei
-        // Viertel des Aufwands floss ins Nachdenken, und der erste echte Aufruf riss dadurch den
-        // 15-Sekunden-Deckel. Fuer eine Extraktion mit erzwungenem Antwortschema ist das
-        // verschwendete Zeit: das Modell muss Text zerlegen, nicht gruebeln.
-        // Gemessen am echten Dienst (gemini-3.5-flash, 2026-09-12, gleiche Eingabe):
-        //   Standard  8-15 s, 859 Denk-Token, 1185 Token gesamt  (riss den Zeitdeckel)
-        //   low        5,3 s, 637 Denk-Token,  843 Token gesamt
-        //   minimal    3,0 s,   0 Denk-Token,  210 Token gesamt
-        // Die Postenliste war bei allen dreien gleich gut. Fuenfmal weniger Token bei einem
-        // Drittel der Wartezeit, ohne Qualitaetsverlust - deshalb minimal.
-        // Konfigurierbar, weil nicht jedes Modell dieselben Stufen kennt (minimal/low/medium/high).
-        var thinkingLevel = configuration["Gemini:ThinkingLevel"] is { Length: > 0 } stufe ? stufe : "minimal";
-
-        var payload = new
-        {
-            model,
-            input = transcript.ToString(),
-            system_instruction = SystemInstruction,
-            response_format = new
-            {
-                type = "text",
-                mime_type = "application/json",
-                schema = ResponseSchema
-            },
-            generation_config = new { thinking_level = thinkingLevel }
-        };
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
-        {
-            Content = new StringContent(JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8, "application/json")
-        };
-        request.Headers.Add("x-goog-api-key", apiKey);
-        request.Headers.Add("Api-Revision", ApiRevision);
-
-        HttpResponseMessage response;
-        try
-        {
-            response = await httpClient.SendAsync(request, ct);
-        }
-        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
-        {
-            // Timeout des HttpClient, nicht Abbruch durch den Aufrufer.
-            throw new GeminiUnavailableException("Gemini hat nicht rechtzeitig geantwortet.", ex);
-        }
-        catch (HttpRequestException ex)
-        {
-            throw new GeminiUnavailableException("Gemini ist nicht erreichbar.", ex);
-        }
-
-        if (response.StatusCode == HttpStatusCode.TooManyRequests)
-            throw new GeminiQuotaException("Kontingent erschoepft.");
-
-        if (!response.IsSuccessStatusCode)
-            throw new GeminiUnavailableException($"Gemini antwortete mit {(int)response.StatusCode}.");
-
-        var body = await response.Content.ReadAsStringAsync(ct);
-        var inner = ExtractPayload(body);
+        var inner = await SendAsync(SystemInstruction, transcript.ToString(), ResponseSchema, ct);
 
         GeminiParseResult result;
         try
@@ -302,6 +259,144 @@ public class GeminiService(HttpClient httpClient, IConfiguration configuration, 
             throw new GeminiMalformedResponseException(
                 "Unerwarteter Antwortumschlag; erwartet wurde steps[].content[].text " +
                 $"(oder output_text). Tatsaechlich empfangen: {DescribeRoot(root)}");
+        }
+    }
+
+    /// <summary>
+    /// Der eine Weg nach draussen. Beide Aufgaben - Mahlzeiten zerlegen und einen Zielwunsch
+    /// deuten - gehen hier durch, damit Kopfzeilen, Zeitverhalten, Fehlerabbildung und die
+    /// Denkstufe nur an einer Stelle stehen und nicht auseinanderlaufen.
+    /// </summary>
+    private async Task<string> SendAsync(string systemInstruction, string input, object schema, CancellationToken ct)
+    {
+        var apiKey = configuration["Gemini:ApiKey"];
+        if (string.IsNullOrWhiteSpace(apiKey))
+            throw new GeminiUnavailableException("Gemini:ApiKey fehlt.");
+
+        var model = configuration["Gemini:Model"] is { Length: > 0 } configured
+            ? configured
+            : "gemini-3.5-flash";
+
+        // Gemessen am echten Dienst (gemini-3.5-flash, 2026-09-12, gleiche Eingabe):
+        //   Standard  8-15 s, 859 Denk-Token, 1185 Token gesamt  (riss den Zeitdeckel)
+        //   low        5,3 s, 637 Denk-Token,  843 Token gesamt
+        //   minimal    3,0 s,   0 Denk-Token,  210 Token gesamt
+        // Gleiche Qualitaet bei einem Fuenftel der Token - deshalb minimal. Konfigurierbar, weil
+        // nicht jedes Modell dieselben Stufen kennt (minimal/low/medium/high).
+        var thinkingLevel = configuration["Gemini:ThinkingLevel"] is { Length: > 0 } stufe ? stufe : "minimal";
+
+        // system_instruction ist ein eigenes Feld der Interactions-API. Die Anweisung dort
+        // unterzubringen statt sie dem Nutzertext voranzustellen, haelt beides sauber getrennt:
+        // der Nutzer kann die Anweisung nicht mit eigenem Text ueberschreiben.
+        var payload = new
+        {
+            model,
+            input,
+            system_instruction = systemInstruction,
+            response_format = new
+            {
+                type = "text",
+                mime_type = "application/json",
+                schema
+            },
+            generation_config = new { thinking_level = thinkingLevel }
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8, "application/json")
+        };
+        request.Headers.Add("x-goog-api-key", apiKey);
+        request.Headers.Add("Api-Revision", ApiRevision);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await httpClient.SendAsync(request, ct);
+        }
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            // Timeout des HttpClient, nicht Abbruch durch den Aufrufer.
+            throw new GeminiUnavailableException("Gemini hat nicht rechtzeitig geantwortet.", ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new GeminiUnavailableException("Gemini ist nicht erreichbar.", ex);
+        }
+
+        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+            throw new GeminiQuotaException("Kontingent erschoepft.");
+
+        if (!response.IsSuccessStatusCode)
+            throw new GeminiUnavailableException($"Gemini antwortete mit {(int)response.StatusCode}.");
+
+        return ExtractPayload(await response.Content.ReadAsStringAsync(ct));
+    }
+
+    private const string WishInstruction = """
+        Du liest aus einem deutschsprachigen Satz heraus, welches Ernaehrungsziel jemand verfolgt.
+        Du rechnest NICHTS aus - Kalorien und Makros bestimmt eine Formel, nicht du.
+        Liefere:
+          direction         "lose" (abnehmen), "hold" (Gewicht halten) oder "gain" (aufbauen)
+          intensityPercent  gewuenschte Abweichung vom Erhaltungsbedarf in Prozent, falls der Satz
+                            eine Geschwindigkeit nennt ("langsam" etwa 10, "zuegig" etwa 25,
+                            ohne Angabe: weglassen)
+          style             "lowCarb" bei ausdruecklichem Wunsch nach wenig Kohlenhydraten,
+                            "highProtein" bei Muskelaufbau oder ausdruecklichem Proteinwunsch,
+                            sonst "balanced"
+          interpretation    EIN kurzer deutscher Satz, wie du den Wunsch verstanden hast. Der
+                            Nutzer liest ihn zur Gegenkontrolle, bevor die Ziele uebernommen
+                            werden - schreibe ihn so, dass ein Missverstaendnis auffaellt.
+        Ist kein Ziel erkennbar, nimm "hold" und sage das in interpretation.
+        """;
+
+    private static object WishSchema => new
+    {
+        type = "object",
+        properties = new
+        {
+            direction = new { type = "string", @enum = new[] { "lose", "hold", "gain" } },
+            intensityPercent = new { type = "number" },
+            style = new { type = "string", @enum = new[] { "balanced", "highProtein", "lowCarb" } },
+            interpretation = new { type = "string" },
+        },
+        required = new[] { "direction", "style", "interpretation" },
+    };
+
+    /// <summary>
+    /// Deutet einen Zielwunsch. Es geht AUSSCHLIESSLICH der uebergebene Satz nach draussen -
+    /// keine Koerperdaten. Das ist der Kern der Abmachung mit dem Nutzer: Google erfaehrt, dass
+    /// jemand abnehmen will, aber nicht, wer wie viel wiegt.
+    /// </summary>
+    public async Task<GeminiWishResult> ParseWishAsync(string wish, CancellationToken ct)
+    {
+        var inner = await SendAsync(WishInstruction, $"Nutzer: {wish}", WishSchema, ct);
+
+        try
+        {
+            var ergebnis = JsonSerializer.Deserialize<GeminiWishResult>(inner, JsonOptions)
+                           ?? throw new GeminiMalformedResponseException("Leere Antwort.");
+
+            ergebnis.Direction = ergebnis.Direction?.Trim().ToLowerInvariant() switch
+            {
+                "lose" => "lose",
+                "gain" => "gain",
+                _ => "hold",
+            };
+
+            ergebnis.Style = ergebnis.Style?.Trim() switch
+            {
+                "lowCarb" => "lowCarb",
+                "highProtein" => "highProtein",
+                _ => "balanced",
+            };
+
+            return ergebnis;
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Gemini-Antwort zum Zielwunsch passt nicht zum Schema.");
+            throw new GeminiMalformedResponseException("Antwort passt nicht zum Schema.");
         }
     }
 

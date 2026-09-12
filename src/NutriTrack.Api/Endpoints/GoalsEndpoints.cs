@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using NutriTrack.Api.Contracts.Goals;
+using NutriTrack.Api.Services;
 using NutriTrack.Domain.Entities;
 using NutriTrack.Infrastructure.Data;
 
@@ -23,6 +24,110 @@ public static class GoalsEndpoints
                 return Results.NotFound();
 
             return Results.Ok(MapToResponse(goal));
+        });
+
+        // Schlaegt Ziele vor, SPEICHERT ABER NICHTS. Uebernommen wird ueber das bestehende PUT,
+        // nachdem der Nutzer die Zahlen gesehen hat - dasselbe Muster wie bei den Mahlzeiten.
+        group.MapPost("/suggest", async (
+            SuggestGoalsRequest request,
+            IConfiguration configuration,
+            GeminiService gemini,
+            ClaimsPrincipal user,
+            AiRateLimiter limiter,
+            CancellationToken ct) =>
+        {
+            if (request.WeightKg is < 25m or > 400m)
+                return Results.BadRequest(new { Error = "Gewicht muss zwischen 25 und 400 kg liegen." });
+
+            if (request.HeightCm is < 100m or > 250m)
+                return Results.BadRequest(new { Error = "Größe muss zwischen 100 und 250 cm liegen." });
+
+            if (request.Age is < 14 or > 120)
+                return Results.BadRequest(new { Error = "Alter muss zwischen 14 und 120 Jahren liegen." });
+
+            if (request.Wish.Length > 500)
+                return Results.BadRequest(new { Error = "Bitte höchstens 500 Zeichen." });
+
+            var body = new BodyData(
+                request.WeightKg,
+                request.HeightCm,
+                request.Age,
+                string.Equals(request.Sex, "female", StringComparison.OrdinalIgnoreCase) ? Sex.Female : Sex.Male,
+                request.ActivityLevel?.Trim().ToLowerInvariant() switch
+                {
+                    "light" => ActivityLevel.Light,
+                    "moderate" => ActivityLevel.Moderate,
+                    "active" => ActivityLevel.Active,
+                    "veryactive" => ActivityLevel.VeryActive,
+                    _ => ActivityLevel.Sedentary,
+                });
+
+            var richtung = GoalDirection.Hold;
+            var stil = MacroStyle.Balanced;
+            decimal? intensitaet = null;
+            var deutung = "Gewicht halten.";
+
+            // Ohne Wunsch und ohne eingerichtete KI wird einfach der Erhaltungsbedarf gerechnet -
+            // das ist eine brauchbare Antwort und kein Fehlerfall.
+            if (!string.IsNullOrWhiteSpace(request.Wish)
+                && !string.IsNullOrWhiteSpace(configuration["Gemini:ApiKey"]))
+            {
+                var userId = user.FindFirst(ClaimTypes.NameIdentifier)!.Value;
+                if (!limiter.TryAcquire(userId))
+                    return Results.Json(
+                        new { Error = "Zu viele KI-Anfragen in der letzten Stunde. Versuche es später noch einmal." },
+                        statusCode: StatusCodes.Status429TooManyRequests);
+
+                try
+                {
+                    // HIER GEHT NUR DER WUNSCH RAUS. Gewicht, Groesse, Alter und Geschlecht
+                    // bleiben auf diesem Rechner - das ist die Abmachung mit dem Nutzer.
+                    var gedeutet = await gemini.ParseWishAsync(request.Wish, ct);
+
+                    richtung = gedeutet.Direction switch
+                    {
+                        "lose" => GoalDirection.Lose,
+                        "gain" => GoalDirection.Gain,
+                        _ => GoalDirection.Hold,
+                    };
+
+                    stil = gedeutet.Style switch
+                    {
+                        "lowCarb" => MacroStyle.LowCarb,
+                        "highProtein" => MacroStyle.HighProtein,
+                        _ => MacroStyle.Balanced,
+                    };
+
+                    intensitaet = gedeutet.IntensityPercent;
+                    deutung = gedeutet.Interpretation;
+                }
+                catch (GeminiQuotaException)
+                {
+                    return Results.Json(
+                        new { Error = "Das KI-Kontingent ist erschöpft. Versuche es später noch einmal." },
+                        statusCode: StatusCodes.Status429TooManyRequests);
+                }
+                catch (Exception ex) when (ex is GeminiUnavailableException or GeminiMalformedResponseException)
+                {
+                    return Results.Json(
+                        new { Error = "Die KI ist gerade nicht erreichbar. Du kannst die Ziele von Hand eintragen." },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+            }
+
+            var ziele = GoalCalculator.Calculate(body, richtung, stil, intensitaet);
+
+            return Results.Ok(new GoalsSuggestionResponse
+            {
+                CalorieGoal = ziele.Calories,
+                ProteinGoal = ziele.Protein,
+                CarbohydrateGoal = ziele.Carbohydrates,
+                FatGoal = ziele.Fat,
+                BasalMetabolicRate = ziele.BasalMetabolicRate,
+                MaintenanceCalories = ziele.MaintenanceCalories,
+                Explanation = ziele.Explanation,
+                InterpretedWish = deutung,
+            });
         });
 
         group.MapPut("/", async (UpsertGoalsRequest request, ClaimsPrincipal user, AppDbContext db) =>

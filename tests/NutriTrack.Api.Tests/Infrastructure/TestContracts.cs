@@ -61,3 +61,15 @@ public class NutrientEstimateDto
     public decimal Carbohydrates { get; set; }
     public decimal Fat { get; set; }
 }
+
+public class GoalsSuggestionDto
+{
+    public decimal CalorieGoal { get; set; }
+    public decimal ProteinGoal { get; set; }
+    public decimal CarbohydrateGoal { get; set; }
+    public decimal FatGoal { get; set; }
+    public decimal BasalMetabolicRate { get; set; }
+    public decimal MaintenanceCalories { get; set; }
+    public string Explanation { get; set; } = string.Empty;
+    public string InterpretedWish { get; set; } = string.Empty;
+}

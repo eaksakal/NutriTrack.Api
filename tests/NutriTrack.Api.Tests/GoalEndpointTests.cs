@@ -168,4 +168,151 @@ public class GoalEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nut
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
+
+    /// <summary>
+    /// Die Kernzusage dieses Endpunkts: Koerperdaten verlassen den Server nicht. An Google geht
+    /// ausschliesslich der Wunsch in Worten. Der Test liest mit, was tatsaechlich gesendet wurde.
+    /// </summary>
+    [Fact]
+    public async Task Suggest_SendsOnlyTheWishToGoogle_NeverBodyData()
+    {
+        string? gesendet = null;
+        factory.GeminiResponder = request =>
+        {
+            gesendet = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return StubGeminiHandler.Payload("""
+            { "direction": "lose", "intensityPercent": 20, "style": "balanced",
+              "interpretation": "Abnehmen in moderatem Tempo." }
+            """);
+        };
+
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/goals/suggest", new
+        {
+            weightKg = 82,
+            heightCm = 180,
+            age = 35,
+            sex = "male",
+            activityLevel = "sedentary",
+            wish = "abnehmen, aber nicht hungern"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(gesendet);
+
+        // Der Wunsch ist drin ...
+        Assert.Contains("abnehmen", gesendet);
+        // ... die Koerperdaten nicht. Weder als Zahl noch als Feldname.
+        Assert.DoesNotContain("82", gesendet);
+        Assert.DoesNotContain("180", gesendet);
+        Assert.DoesNotContain("35", gesendet);
+        Assert.DoesNotContain("weight", gesendet, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("height", gesendet, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Suggest_ComputesTargetsFromTheFormulaNotFromTheModel()
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        { "direction": "lose", "intensityPercent": 20, "style": "balanced",
+          "interpretation": "Abnehmen in moderatem Tempo." }
+        """);
+
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/goals/suggest", new
+        {
+            weightKg = 82, heightCm = 180, age = 35, sex = "male",
+            activityLevel = "sedentary", wish = "abnehmen"
+        });
+
+        var vorschlag = await response.Content.ReadFromJsonAsync<GoalsSuggestionDto>();
+
+        // Grundumsatz 1775, Erhaltung 2130, minus 20 Prozent: 1704. Von Hand nachgerechnet.
+        Assert.Equal(1775m, vorschlag!.BasalMetabolicRate);
+        Assert.Equal(2130m, vorschlag.MaintenanceCalories);
+        Assert.Equal(1704m, vorschlag.CalorieGoal);
+        Assert.Equal("Abnehmen in moderatem Tempo.", vorschlag.InterpretedWish);
+        Assert.Contains("Mifflin", vorschlag.Explanation);
+    }
+
+    /// <summary>Ohne eingerichtete KI ist der Erhaltungsbedarf eine brauchbare Antwort - kein Fehler.</summary>
+    [Fact]
+    public async Task Suggest_WithoutWish_ReturnsMaintenanceWithoutCallingTheModel()
+    {
+        var aufrufe = 0;
+        factory.GeminiResponder = _ =>
+        {
+            Interlocked.Increment(ref aufrufe);
+            return StubGeminiHandler.Payload("""{"direction":"lose","style":"balanced","interpretation":"x"}""");
+        };
+
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/goals/suggest", new
+        {
+            weightKg = 65, heightCm = 168, age = 30, sex = "female",
+            activityLevel = "moderate", wish = ""
+        });
+
+        var vorschlag = await response.Content.ReadFromJsonAsync<GoalsSuggestionDto>();
+
+        Assert.Equal(0, aufrufe);
+        // 1389 * 1.55 = 2152.95 -> 2153
+        Assert.Equal(2153m, vorschlag!.CalorieGoal);
+    }
+
+    [Theory]
+    [InlineData(10, 180, 35)]
+    [InlineData(82, 50, 35)]
+    [InlineData(82, 180, 5)]
+    [InlineData(82, 180, 200)]
+    public async Task Suggest_WithImplausibleBodyData_ReturnsBadRequest(int kg, int cm, int alter)
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/goals/suggest", new
+        {
+            weightKg = kg, heightCm = cm, age = alter, sex = "male",
+            activityLevel = "sedentary", wish = "abnehmen"
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Suggest_WithoutToken_ReturnsUnauthorized()
+    {
+        var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/goals/suggest", new
+        {
+            weightKg = 82, heightCm = 180, age = 35, sex = "male",
+            activityLevel = "sedentary", wish = "abnehmen"
+        });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    /// <summary>Der Vorschlag speichert nicht - erst das bestehende PUT tut das.</summary>
+    [Fact]
+    public async Task Suggest_DoesNotPersistAnything()
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        { "direction": "lose", "style": "balanced", "interpretation": "Abnehmen." }
+        """);
+
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        await client.PostAsJsonAsync("/api/goals/suggest", new
+        {
+            weightKg = 82, heightCm = 180, age = 35, sex = "male",
+            activityLevel = "sedentary", wish = "abnehmen"
+        });
+
+        var danach = await client.GetAsync("/api/goals");
+
+        Assert.Equal(HttpStatusCode.NotFound, danach.StatusCode);
+    }
 }
