@@ -28,14 +28,21 @@ public class OpenFoodFactsService(
     private const int MaxAttempts = 2;
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(400);
 
+    /// <param name="retryOnFailure">
+    /// Nur setzen, wenn EIN Nutzer auf EIN Ergebnis wartet - die Suchseite. Im KI-Pfad laufen
+    /// mehrere Begriffe je Eingabe, dort verdoppelt die Wiederholung den Kontingentverbrauch und
+    /// die Wartezeit, obwohl es mit der Schaetzung bereits einen Rueckfall gibt.
+    /// </param>
     public async Task<List<OpenFoodFactsProduct>> SearchAsync(
-        string query, int page = 1, int pageSize = 20, CancellationToken ct = default)
+        string query, int page = 1, int pageSize = 20, CancellationToken ct = default,
+        bool retryOnFailure = true)
     {
+        var maxAttempts = retryOnFailure ? MaxAttempts : 1;
         var url = $"https://world.openfoodfacts.org/cgi/search.pl?search_terms={Uri.EscapeDataString(query)}&search_simple=1&action=process&json=1&page={page}&page_size={pageSize}";
 
         Exception? letzterFehler = null;
 
-        for (var versuch = 1; versuch <= MaxAttempts; versuch++)
+        for (var versuch = 1; versuch <= maxAttempts; versuch++)
         {
             // Das Kontingent wird HIER genommen, nicht beim Aufrufer: nur so zaehlen alle Wege in
             // die Suche mit - die Suchseite ebenso wie der KI-Pfad - und ein Wiederholungsversuch
@@ -65,7 +72,7 @@ public class OpenFoodFactsService(
             {
                 letzterFehler = ex;
 
-                if (versuch < MaxAttempts)
+                if (versuch < maxAttempts)
                 {
                     logger.LogInformation(
                         "OpenFoodFacts-Suche fuer {Query} fehlgeschlagen (Versuch {Versuch}), ein zweiter Anlauf.",

@@ -17,9 +17,12 @@ public class AiMealAssistant(
     // dem Gemini-Aufruf (15 s, Program.cs) keine Wirkung: haengt OpenFoodFacts, lief je Posten der
     // Einzel-Timeout von 10 s ab, bei 20 Posten also ueber drei Minuten — eine Anfrage, die weder
     // Kestrel noch der Browser abbricht, waehrend die Oberflaeche "Denkt nach..." zeigt.
-    // 20 s ist so bemessen, dass eine gesunde Fremddatenbank (Antwort im Bereich von 100 ms)
-    // muehelos alle Posten schafft, eine kranke aber nach zwei Einzel-Timeouts Schluss ist.
-    private const int SearchBudgetSeconds = 20;
+    // 8 s ist so bemessen, dass eine gesunde Fremddatenbank (Antwort im Bereich von 100 ms)
+    // muehelos alle Posten schafft. Frueher standen hier 20 s - im Betrieb am 2026-09-12 wartete
+    // der Nutzer damit ueber 25 Sekunden auf eine Antwort, die am Ende doch nur Schaetzwerte
+    // enthielt, weil OpenFoodFacts gerade bei jedem zweiten Aufruf 503 sagte. Eine schnelle
+    // Schaetzung schlaegt eine langsame Schaetzung.
+    private const int SearchBudgetSeconds = 8;
 
     // Mehrere Suchen gleichzeitig, aber nicht alle: OpenFoodFacts ist ein Gratisdienst, und ein
     // Schwall von 20 gleichzeitigen Anfragen je Nutzereingabe ist der schnellste Weg zur
@@ -175,8 +178,12 @@ public class AiMealAssistant(
         List<OpenFoodFactsProduct> products;
         try
         {
+            // Ohne Wiederholung: hier haengen mehrere Begriffe an einer Eingabe, und fuer jeden
+            // gibt es mit der Schaetzung bereits einen Rueckfall. Die Suchseite wiederholt sehr
+            // wohl - dort wartet ein Mensch auf genau dieses eine Ergebnis.
             products = await openFoodFacts.SearchAsync(
-                searchTerm, page: 1, pageSize: CandidatesPerItem * 2, ct: budgetToken);
+                searchTerm, page: 1, pageSize: CandidatesPerItem * 2, ct: budgetToken,
+                retryOnFailure: false);
         }
         // Gesamtfrist abgelaufen (nicht der Nutzer hat abgebrochen): die restlichen Posten fallen
         // auf ihre Schaetzung zurueck. Eine halbe Antwort jetzt ist besser als eine vollstaendige
