@@ -51,7 +51,7 @@ public class NutriTrackApiFactory : WebApplicationFactory<AuthResponse>, IAsyncL
         _ => StubGeminiHandler.Payload("""{"items":[]}""");
 
     /// <summary>Null bedeutet: normales Stub-Verhalten. Gesetzt: diese Antwort fuer jede Anfrage.</summary>
-    public Func<HttpRequestMessage, HttpResponseMessage>? OpenFoodFactsResponder { get; set; }
+    public Func<HttpRequestMessage, HttpResponseMessage?>? OpenFoodFactsResponder { get; set; }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {

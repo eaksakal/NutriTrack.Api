@@ -264,6 +264,150 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
         Assert.Equal(HttpStatusCode.TooManyRequests, blocked.StatusCode);
     }
 
+    [Fact]
+    public async Task ParseMeal_WithRepeatedSearchTerm_QueriesOpenFoodFactsOnce()
+    {
+        // Eigene Instanz: Bremse und Zwischenspeicher sind Singletons der Anwendung, und dieser
+        // Test zaehlt Anfragen. In der geteilten Factory wuerde jeder frueher gelaufene Test
+        // mitzaehlen.
+        using var isolated = new NutriTrackApiFactory();
+        await isolated.ResetDatabaseAsync();
+
+        var suchen = 0;
+        isolated.OpenFoodFactsResponder = request =>
+        {
+            if (request.RequestUri!.ToString().Contains("/cgi/search.pl", StringComparison.Ordinal))
+                Interlocked.Increment(ref suchen);
+
+            return null;   // null heisst: normales Stub-Verhalten
+        };
+
+        isolated.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        {
+          "items": [
+            { "searchTerm": "Broetchen", "label": "Broetchen", "quantityInGrams": 60,
+              "mealType": "Breakfast",
+              "estimate": { "calories": 265, "protein": 9, "carbohydrates": 49, "fat": 3.2 } },
+            { "searchTerm": "broetchen", "label": "Noch ein Broetchen", "quantityInGrams": 60,
+              "mealType": "Breakfast",
+              "estimate": { "calories": 265, "protein": 9, "carbohydrates": 49, "fat": 3.2 } },
+            { "searchTerm": "Butter", "label": "Butter", "quantityInGrams": 10,
+              "mealType": "Breakfast",
+              "estimate": { "calories": 717, "protein": 0.9, "carbohydrates": 0.1, "fat": 81 } }
+          ]
+        }
+        """);
+
+        var (client, _, _) = await isolated.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "zwei Broetchen mit Butter" } }
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var parsed = await response.Content.ReadFromJsonAsync<ParseMealResponseDto>();
+
+        // Drei Posten, aber nur ZWEI verschiedene Begriffe - und "Broetchen"/"broetchen" zaehlt
+        // als einer. OpenFoodFacts erlaubt nur 10 Suchen je Minute; jede gesparte zaehlt.
+        Assert.Equal(3, parsed!.Items.Count);
+        Assert.Equal(2, suchen);
+
+        // Beide Broetchen-Posten haben trotzdem dieselben Kandidaten bekommen.
+        Assert.Equal("openfoodfacts", parsed.Items[0].Source);
+        Assert.Equal("openfoodfacts", parsed.Items[1].Source);
+        Assert.Equal(parsed.Items[0].Candidates[0].Name, parsed.Items[1].Candidates[0].Name);
+    }
+
+    [Fact]
+    public async Task ParseMeal_WhenSearchQuotaIsSpent_FallsBackToEstimateAndSaysSo()
+    {
+        using var isolated = new NutriTrackApiFactory();
+        await isolated.ResetDatabaseAsync();
+
+        var (client, _, _) = await isolated.CreateUserAsync();
+
+        // Acht verschiedene Begriffe verbrauchen das Kontingent genau auf; der neunte findet
+        // keines mehr vor und faellt auf die Schaetzung zurueck.
+        string Posten(string term) => $$"""
+            { "searchTerm": "{{term}}", "label": "{{term}}", "quantityInGrams": 50,
+              "mealType": "Snack",
+              "estimate": { "calories": 100, "protein": 1, "carbohydrates": 2, "fat": 3 } }
+            """;
+
+        var ersteAcht = string.Join(",", Enumerable.Range(1, 8).Select(i => Posten($"begriff-{i}")));
+        isolated.GeminiResponder = _ => StubGeminiHandler.Payload($$"""{ "items": [{{ersteAcht}}] }""");
+
+        var aufbrauchen = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "ein grosses Buffet" } }
+        });
+        Assert.Equal(HttpStatusCode.OK, aufbrauchen.StatusCode);
+
+        isolated.GeminiResponder = _ => StubGeminiHandler.Payload($$"""{ "items": [{{Posten("begriff-neun")}}] }""");
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "und noch ein Nachschlag" } }
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var parsed = await response.Content.ReadFromJsonAsync<ParseMealResponseDto>();
+
+        var item = Assert.Single(parsed!.Items);
+        Assert.Equal("estimate", item.Source);
+        Assert.Empty(item.Candidates);
+        Assert.NotNull(item.Estimate);
+
+        // Der Nutzer muss erfahren, WARUM nur geschaetzt wurde - sonst wirkt es wie eine Luecke
+        // in der Lebensmitteldatenbank statt wie eine Bremse bei uns.
+        Assert.NotNull(parsed.Notice);
+        Assert.Contains("Suchkontingent", parsed.Notice);
+    }
+
+    [Fact]
+    public async Task ParseMeal_RepeatedAcrossRequests_UsesCacheInsteadOfQuota()
+    {
+        using var isolated = new NutriTrackApiFactory();
+        await isolated.ResetDatabaseAsync();
+
+        var suchen = 0;
+        isolated.OpenFoodFactsResponder = request =>
+        {
+            if (request.RequestUri!.ToString().Contains("/cgi/search.pl", StringComparison.Ordinal))
+                Interlocked.Increment(ref suchen);
+
+            return null;
+        };
+
+        isolated.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        {
+          "items": [
+            { "searchTerm": "Kaffee", "label": "Kaffee", "quantityInGrams": 200,
+              "mealType": "Breakfast",
+              "estimate": { "calories": 2, "protein": 0.1, "carbohydrates": 0, "fat": 0 } }
+          ]
+        }
+        """);
+
+        var (client, _, _) = await isolated.CreateUserAsync();
+
+        object Rumpf() => new { messages = new[] { new { role = "user", text = "ein Kaffee" } } };
+
+        for (var i = 0; i < 5; i++)
+        {
+            var response = await client.PostAsJsonAsync("/api/ai/parse-meal", Rumpf());
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            var parsed = await response.Content.ReadFromJsonAsync<ParseMealResponseDto>();
+            Assert.Equal("openfoodfacts", Assert.Single(parsed!.Items).Source);
+        }
+
+        // Fuenf Anfragen, EIN Aufruf beim Fremddienst. Ohne Zwischenspeicher waeren nach sechs
+        // Eingaben dieser Art bereits mehr als die Haelfte des Minutenkontingents verbraucht.
+        Assert.Equal(1, suchen);
+    }
+
     /// <summary>Startet dieselbe Anwendung, aber ohne Gemini:ApiKey — fuer den Nachweis, dass ein
     /// nicht eingerichtetes Zusatzfeature sauber 503 meldet, statt den Start zu verhindern.</summary>
     private sealed class WithoutGeminiKeyFactory : NutriTrackApiFactory

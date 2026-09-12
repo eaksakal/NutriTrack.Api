@@ -1,9 +1,15 @@
+using Microsoft.Extensions.Caching.Memory;
 using NutriTrack.Api.Contracts.Ai;
 using NutriTrack.Api.Contracts.Food;
 
 namespace NutriTrack.Api.Services;
 
-public class AiMealAssistant(GeminiService gemini, OpenFoodFactsService openFoodFacts, ILogger<AiMealAssistant> logger)
+public class AiMealAssistant(
+    GeminiService gemini,
+    OpenFoodFactsService openFoodFacts,
+    OpenFoodFactsThrottle throttle,
+    IMemoryCache cache,
+    ILogger<AiMealAssistant> logger)
 {
     private const int MaxItems = 20;
     private const int CandidatesPerItem = 3;
@@ -21,6 +27,11 @@ public class AiMealAssistant(GeminiService gemini, OpenFoodFactsService openFood
     // IP-Sperre. Vier gleichzeitig holen aus dem Zeitbudget oben das Vierfache heraus, ohne den
     // Fremddienst zu ueberfahren.
     private const int MaxParallelSearches = 4;
+
+    // Naehrwerte je 100 g aendern sich nicht im Minutentakt. Ein kurzer Zwischenspeicher kostet
+    // nichts und spart bei den Begriffen, die staendig wiederkehren ("Kaffee", "Broetchen"),
+    // genau die Anfragen, die sonst das knappe Suchkontingent aufbrauchen.
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(30);
 
     public async Task<ParseMealResponse> ParseAsync(IReadOnlyList<ChatMessage> messages, CancellationToken ct)
     {
@@ -63,12 +74,30 @@ public class AiMealAssistant(GeminiService gemini, OpenFoodFactsService openFood
         // ohnehin nichts zu entsorgen.
         var gate = new SemaphoreSlim(MaxParallelSearches, MaxParallelSearches);
 
-        async Task<List<FoodSearchResponse>> RunAsync(GeminiItem item)
+        // EINE SUCHE JE VERSCHIEDENEM BEGRIFF, nicht eine je Posten. "zwei Broetchen, dazu noch
+        // ein Broetchen mit Butter" nennt denselben Begriff mehrfach, und OpenFoodFacts erlaubt
+        // nur 10 Suchen je Minute und IP (siehe OpenFoodFactsThrottle). Jede eingesparte Anfrage
+        // ist bares Kontingent - und die Antwort ist fuer denselben Begriff ohnehin dieselbe.
+        var terms = items
+            .Select(NormalizeTerm)
+            .Where(term => term.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Wird von den Suchaufgaben gesetzt, sobald eine wegen des Kontingents gar nicht erst
+        // gestellt wurde. Nur gesetzt, nie zurueckgenommen - ein einfaches bool genuegt.
+        var throttled = false;
+
+        async Task<KeyValuePair<string, List<FoodSearchResponse>>> RunAsync(string term)
         {
             await gate.WaitAsync(ct);
             try
             {
-                return await SearchCandidatesAsync(item.SearchTerm, budget.Token, ct);
+                var (candidates, wasThrottled) = await SearchCandidatesAsync(term, budget.Token, ct);
+                if (wasThrottled)
+                    throttled = true;
+
+                return new KeyValuePair<string, List<FoodSearchResponse>>(term, candidates);
             }
             finally
             {
@@ -76,11 +105,9 @@ public class AiMealAssistant(GeminiService gemini, OpenFoodFactsService openFood
             }
         }
 
-        // Task.WhenAll behaelt die Reihenfolge der Aufgaben bei - die Posten bleiben also in der
-        // Reihenfolge, in der das Modell sie genannt hat, obwohl die Suchen sich ueberholen.
-        var searches = items.Select(RunAsync).ToArray();
+        var searches = terms.Select(RunAsync).ToArray();
 
-        List<FoodSearchResponse>[] candidateLists;
+        KeyValuePair<string, List<FoodSearchResponse>>[] candidateLists;
         try
         {
             candidateLists = await Task.WhenAll(searches);
@@ -99,10 +126,20 @@ public class AiMealAssistant(GeminiService gemini, OpenFoodFactsService openFood
             throw;
         }
 
-        for (var index = 0; index < items.Count; index++)
+        var byTerm = candidateLists.ToDictionary(
+            entry => entry.Key, entry => entry.Value, StringComparer.OrdinalIgnoreCase);
+
+        if (throttled)
         {
-            var item = items[index];
-            var candidates = candidateLists[index];
+            // Sichtbar sagen, warum manche Posten nur geschaetzt sind. Ohne diesen Hinweis wirkt
+            // es wie eine Luecke in der Lebensmitteldatenbank statt wie eine Bremse bei uns.
+            response.Notice = Join(response.Notice,
+                "Das Suchkontingent der Lebensmitteldatenbank war kurz erschöpft; einzelne Posten sind deshalb nur geschätzt. In einer Minute erneut versuchen liefert genauere Werte.");
+        }
+
+        foreach (var item in items)
+        {
+            var candidates = byTerm.TryGetValue(NormalizeTerm(item), out var found) ? found : [];
 
             response.Items.Add(new ParsedItem
             {
@@ -118,9 +155,33 @@ public class AiMealAssistant(GeminiService gemini, OpenFoodFactsService openFood
         return response;
     }
 
-    private async Task<List<FoodSearchResponse>> SearchCandidatesAsync(
+    private static string NormalizeTerm(GeminiItem item) => NormalizeTerm(item.SearchTerm);
+
+    private static string NormalizeTerm(string? searchTerm) => (searchTerm ?? string.Empty).Trim();
+
+    private static string Join(string? existing, string addition) =>
+        string.IsNullOrWhiteSpace(existing) ? addition : $"{existing} {addition}";
+
+    /// <returns>
+    /// Die Kandidaten und ob die Anfrage am Suchkontingent gescheitert ist. Die Unterscheidung
+    /// ist wichtig: "nichts gefunden" ist ein Ergebnis, "nicht gefragt" ist ein Hinweis wert.
+    /// </returns>
+    private async Task<(List<FoodSearchResponse> Candidates, bool Throttled)> SearchCandidatesAsync(
         string searchTerm, CancellationToken budgetToken, CancellationToken callerToken)
     {
+        var cacheKey = $"off-search:{searchTerm.ToLowerInvariant()}";
+        if (cache.TryGetValue(cacheKey, out List<FoodSearchResponse>? cached) && cached is not null)
+            return (cached, false);
+
+        // Erst fragen, ob wir ueberhaupt duerfen. Ein Aufruf ueber dem Limit bringt kein Ergebnis,
+        // sondern einen 503 von OpenFoodFacts - und bei Wiederholung eine Sperre unserer IP.
+        if (!throttle.TryAcquireSearch())
+        {
+            logger.LogWarning(
+                "Suchkontingent erschoepft; {SearchTerm} nutzt die Schaetzung statt einer Anfrage.", searchTerm);
+            return ([], true);
+        }
+
         List<OpenFoodFactsProduct> products;
         try
         {
@@ -135,17 +196,17 @@ public class AiMealAssistant(GeminiService gemini, OpenFoodFactsService openFood
             logger.LogWarning(
                 "Zeitbudget von {Seconds} s fuer die Kandidatensuche erschoepft; {SearchTerm} nutzt die Schaetzung.",
                 SearchBudgetSeconds, searchTerm);
-            return [];
+            return ([], false);
         }
         catch (OpenFoodFactsUnavailableException ex)
         {
             // Der KI-Pfad soll nicht scheitern, nur weil die Fremddatenbank streikt — der Posten
             // faellt auf die Schaetzung zurueck und ist als solche gekennzeichnet.
             logger.LogWarning(ex, "Kandidatensuche fuer {SearchTerm} fehlgeschlagen, nutze Schaetzung.", searchTerm);
-            return [];
+            return ([], false);
         }
 
-        return products
+        var candidates = products
             .Where(p => p.ProductName is not null)
             .Take(CandidatesPerItem)
             .Select(p => new FoodSearchResponse
@@ -169,5 +230,11 @@ public class AiMealAssistant(GeminiService gemini, OpenFoodFactsService openFood
                 Potassium = p.Nutriments?.Potassium100g
             })
             .ToList();
+
+        // Auch ein leeres Ergebnis wird gemerkt: "kennt OpenFoodFacts nicht" bleibt eine Minute
+        // spaeter richtig, und genau die Begriffe ohne Treffer wiederholen sich beim Nachfassen.
+        cache.Set(cacheKey, candidates, CacheDuration);
+
+        return (candidates, false);
     }
 }

@@ -97,9 +97,19 @@ builder.Services.AddScoped<TokenService>();
 builder.Services.AddScoped<AiMealAssistant>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<AiRateLimiter>();
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<OpenFoodFactsThrottle>();
+
 builder.Services.AddHttpClient<OpenFoodFactsService>(client =>
 {
-    client.DefaultRequestHeaders.UserAgent.ParseAdd("NutriTrack/1.0");
+    // OpenFoodFacts verlangt einen User-Agent der Form "AppName/Version (ContactEmail)" und
+    // behaelt sich vor, Aufrufer ohne erkennbare Kennung als Bot zu behandeln
+    // (openfoodfacts.github.io/openfoodfacts-server/api/). Die Adresse steht bewusst in der
+    // Konfiguration statt im Code: sie gehoert dem Betreiber dieser Instanz, nicht dem Projekt,
+    // und sie hat in einem oeffentlichen Repo nichts verloren.
+    var contact = builder.Configuration["OpenFoodFacts:ContactEmail"];
+    client.DefaultRequestHeaders.UserAgent.ParseAdd(
+        string.IsNullOrWhiteSpace(contact) ? "NutriTrack/1.0" : $"NutriTrack/1.0 ({contact})");
     // OpenFoodFacts ist ein fremder Dienst und der einzige Weg, eine Mahlzeit anzulegen.
     // Der HttpClient-Default von 100 s bedeutet: haengt der Dienst, steht die Suche im
     // Frontend anderthalb Minuten ohne Rueckmeldung. Lieber frueh scheitern.
@@ -314,6 +324,14 @@ app.MapFoodEndpoints();
 app.MapMealEndpoints();
 app.MapGoalsEndpoints();
 app.MapAiEndpoints();
+
+// Ohne Kontaktadresse laeuft NutriTrack weiter, aber OpenFoodFacts darf uns dann jederzeit als
+// anonymen Bot einstufen. Das ist eine Betriebsentscheidung, kein Programmfehler - deshalb ein
+// Hinweis im Log und kein Startabbruch.
+if (string.IsNullOrWhiteSpace(app.Configuration["OpenFoodFacts:ContactEmail"]))
+    app.Logger.LogWarning(
+        "OpenFoodFacts:ContactEmail ist nicht gesetzt. OpenFoodFacts verlangt einen User-Agent " +
+        "der Form \"NutriTrack/1.0 (adresse@example.com)\" und kann Aufrufe ohne Kennung sperren.");
 
 // Unbekannte /api-Pfade muessen 404 bleiben. Der Catch-all steht in der Routen-Rangfolge unter
 // jedem konkreten Endpunkt (Literale schlagen Catch-all), greift aber vor dem SPA-Fallback -

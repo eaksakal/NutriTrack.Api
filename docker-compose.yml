@@ -82,6 +82,10 @@ services:
       # darf das Tagebuch nicht lahmlegen, deshalb hier KEIN `:?`.
       - Gemini__ApiKey=${NUTRITRACK_GEMINI_KEY:-}
       - Gemini__Model=${NUTRITRACK_GEMINI_MODEL:-gemini-3.5-flash}
+      # OpenFoodFacts verlangt einen User-Agent der Form "AppName/Version (ContactEmail)" und
+      # behandelt Aufrufer ohne erkennbare Kennung im Zweifel als Bot. Ohne Wert laeuft alles
+      # weiter, aber mit hoeherem Sperrrisiko - deshalb kein Pflichtfeld.
+      - OpenFoodFacts__ContactEmail=${NUTRITRACK_OFF_CONTACT:-}
       - TZ=Europe/Berlin
       - DOTNET_gcServer=0
     healthcheck:
