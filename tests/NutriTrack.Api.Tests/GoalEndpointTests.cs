@@ -315,4 +315,52 @@ public class GoalEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nut
 
         Assert.Equal(HttpStatusCode.NotFound, danach.StatusCode);
     }
+
+    /// <summary>
+    /// Der eigentliche Anlass dieser Tests: eine einzelne Zielfestlegung kann an der
+    /// Minutengrenze scheitern, waehrend das Tageskontingent voll ist. Wer dann "erschoepft"
+    /// liest, wartet bis morgen statt eine halbe Minute.
+    /// </summary>
+    [Fact]
+    public async Task Suggest_BeiMinutengrenze_SagtWartezeitStattErschoepft()
+    {
+        factory.GeminiResponder = _ =>
+            StubGeminiHandler.QuotaFailure("GenerateRequestsPerMinutePerProjectPerModel", "27s");
+
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/goals/suggest", new
+        {
+            weightKg = 82, heightCm = 180, age = 35, sex = "male",
+            activityLevel = "sedentary", wish = "abnehmen"
+        });
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+        Assert.Equal("27", Assert.Single(response.Headers.GetValues("Retry-After")));
+
+        var text = await response.Content.ReadAsStringAsync();
+        Assert.Contains("27 Sekunden", text);
+        Assert.DoesNotContain("aufgebraucht", text);
+    }
+
+    [Fact]
+    public async Task Suggest_BeiTagesgrenze_NenntDenTagUndKeineSekunden()
+    {
+        factory.GeminiResponder = _ =>
+            StubGeminiHandler.QuotaFailure("GenerateRequestsPerDayPerProjectPerModel");
+
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/goals/suggest", new
+        {
+            weightKg = 82, heightCm = 180, age = 35, sex = "male",
+            activityLevel = "sedentary", wish = "abnehmen"
+        });
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+        Assert.False(response.Headers.Contains("Retry-After"));
+
+        var text = await response.Content.ReadAsStringAsync();
+        Assert.Contains("Tageskontingent", text);
+    }
 }

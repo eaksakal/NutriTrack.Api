@@ -16,6 +16,7 @@ public static class AiEndpoints
             AiMealAssistant assistant,
             ClaimsPrincipal user,
             AiRateLimiter limiter,
+            HttpResponse httpResponse,
             CancellationToken ct) =>
         {
             const int MaxMessages = 10;
@@ -47,11 +48,9 @@ public static class AiEndpoints
                 var result = await assistant.ParseAsync(request.Messages, ct);
                 return Results.Ok(result);
             }
-            catch (GeminiQuotaException)
+            catch (GeminiQuotaException ex)
             {
-                return Results.Json(
-                    new { Error = "Das KI-Kontingent ist erschöpft. Versuche es später noch einmal." },
-                    statusCode: StatusCodes.Status429TooManyRequests);
+                return AiQuotaResponse.From(ex, httpResponse);
             }
             catch (GeminiMalformedResponseException)
             {

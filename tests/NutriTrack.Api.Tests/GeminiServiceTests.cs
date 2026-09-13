@@ -261,4 +261,53 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         Assert.Equal("Apfel", Assert.Single(result.Items).Label);
     }
+
+    /// <summary>
+    /// Google schickt fuer die Minutengrenze denselben 429 wie fuer die Tagesgrenze. Wer nur den
+    /// Statuscode liest, sagt dem Nutzer bei einer Wartezeit von 27 Sekunden, sein Kontingent sei
+    /// aufgebraucht — deshalb muss die gerissene Grenze aus dem Rumpf kommen.
+    /// </summary>
+    [Theory]
+    [InlineData("GenerateRequestsPerMinutePerProjectPerModel", GeminiQuotaScope.PerMinute)]
+    [InlineData("GenerateRequestsPerDayPerProjectPerModel", GeminiQuotaScope.PerDay)]
+    [InlineData("SomethingUnheardOf", GeminiQuotaScope.Unknown)]
+    public async Task ParseAsync_BeiQuotaFehler_LiestDieGerisseneGrenzeAusDemRumpf(
+        string quotaId, GeminiQuotaScope erwartet)
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.QuotaFailure(quotaId, "27s");
+
+        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "ein Apfel" }],
+            CancellationToken.None));
+
+        Assert.Equal(erwartet, ex.Scope);
+        Assert.Equal(TimeSpan.FromSeconds(27), ex.RetryAfter);
+    }
+
+    [Fact]
+    public async Task ParseAsync_BeiQuotaFehlerOhneRetryInfo_LaesstDieWartezeitOffen()
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.QuotaFailure("GenerateRequestsPerDayPerProjectPerModel");
+
+        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "ein Apfel" }],
+            CancellationToken.None));
+
+        Assert.Equal(GeminiQuotaScope.PerDay, ex.Scope);
+        Assert.Null(ex.RetryAfter);
+    }
+
+    /// <summary>Ohne auswertbare Details bleibt der HTTP-Kopf als Quelle der Wartezeit.</summary>
+    [Fact]
+    public async Task ParseAsync_BeiQuotaFehlerOhneDetails_NimmtDenRetryAfterKopf()
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.TooManyRequestsWithRetryAfterHeader(42);
+
+        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "ein Apfel" }],
+            CancellationToken.None));
+
+        Assert.Equal(GeminiQuotaScope.Unknown, ex.Scope);
+        Assert.Equal(TimeSpan.FromSeconds(42), ex.RetryAfter);
+    }
 }

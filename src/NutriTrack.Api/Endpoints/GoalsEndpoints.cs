@@ -34,6 +34,7 @@ public static class GoalsEndpoints
             GeminiService gemini,
             ClaimsPrincipal user,
             AiRateLimiter limiter,
+            HttpResponse httpResponse,
             CancellationToken ct) =>
         {
             if (request.WeightKg is < 25m or > 400m)
@@ -101,11 +102,9 @@ public static class GoalsEndpoints
                     intensitaet = gedeutet.IntensityPercent;
                     deutung = gedeutet.Interpretation;
                 }
-                catch (GeminiQuotaException)
+                catch (GeminiQuotaException ex)
                 {
-                    return Results.Json(
-                        new { Error = "Das KI-Kontingent ist erschöpft. Versuche es später noch einmal." },
-                        statusCode: StatusCodes.Status429TooManyRequests);
+                    return AiQuotaResponse.From(ex, httpResponse);
                 }
                 catch (Exception ex) when (ex is GeminiUnavailableException or GeminiMalformedResponseException)
                 {

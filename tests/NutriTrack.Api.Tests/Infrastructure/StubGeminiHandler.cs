@@ -58,6 +58,58 @@ public sealed class StubGeminiHandler(Func<HttpRequestMessage, HttpResponseMessa
         };
     }
 
+    /// <summary>
+    /// Ein 429 so, wie Google ihn wirklich schickt: die gerissene Grenze steht in
+    /// <c>error.details[]</c> unter <c>QuotaFailure.violations[].quotaId</c>, die Wartezeit
+    /// daneben in <c>RetryInfo.retryDelay</c>. Ohne diese Felder laesst sich "warte eine Minute"
+    /// nicht von "warte bis morgen" unterscheiden — genau darum geht es hier.
+    /// </summary>
+    public static HttpResponseMessage QuotaFailure(string quotaId, string? retryDelay = null)
+    {
+        var retryInfo = retryDelay is null
+            ? ""
+            : ", { \"@type\": \"type.googleapis.com/google.rpc.RetryInfo\", \"retryDelay\": \""
+              + retryDelay + "\" }";
+
+        var body = $$"""
+        {
+          "error": {
+            "code": 429,
+            "message": "Resource has been exhausted (e.g. check quota).",
+            "status": "RESOURCE_EXHAUSTED",
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                "violations": [
+                  {
+                    "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+                    "quotaId": "{{quotaId}}",
+                    "quotaValue": "15"
+                  }
+                ]
+              }{{retryInfo}}
+            ]
+          }
+        }
+        """;
+
+        return new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json")
+        };
+    }
+
+    /// <summary>429 ohne auswertbare Details — nur der HTTP-Kopf <c>Retry-After</c>.</summary>
+    public static HttpResponseMessage TooManyRequestsWithRetryAfterHeader(int seconds)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+        {
+            Content = new StringContent("""{"error":{"message":"stub"}}""", Encoding.UTF8, "application/json")
+        };
+        response.Headers.Add("Retry-After", seconds.ToString());
+        return response;
+    }
+
     public static HttpResponseMessage Status(HttpStatusCode code) => new(code)
     {
         Content = new StringContent("""{"error":{"message":"stub"}}""", Encoding.UTF8, "application/json")

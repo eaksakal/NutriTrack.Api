@@ -583,4 +583,23 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
             builder.UseSetting("Gemini:ApiKey", null);
         }
     }
+
+    /// <summary>Auch der Mahlzeiten-Weg darf die Minutengrenze nicht als Tagesende ausgeben.</summary>
+    [Fact]
+    public async Task ParseMeal_BeiMinutengrenze_SetztRetryAfterUndNenntDieWartezeit()
+    {
+        factory.GeminiResponder = _ =>
+            StubGeminiHandler.QuotaFailure("GenerateRequestsPerMinutePerProjectPerModel", "12s");
+
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "ein Apfel" } }
+        });
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+        Assert.Equal("12", Assert.Single(response.Headers.GetValues("Retry-After")));
+        Assert.Contains("12 Sekunden", await response.Content.ReadAsStringAsync());
+    }
 }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -10,8 +11,30 @@ namespace NutriTrack.Api.Services;
 /// <summary>Google ist erreichbar, aber nicht nutzbar (Timeout, Netz, 5xx).</summary>
 public class GeminiUnavailableException(string message, Exception? inner = null) : Exception(message, inner);
 
-/// <summary>Kontingent erschoepft (429).</summary>
-public class GeminiQuotaException(string message) : Exception(message);
+/// <summary>Welche Grenze Google gerissen sah. Google beantwortet alle mit demselben 429.</summary>
+public enum GeminiQuotaScope
+{
+    /// <summary>Der Rumpf nannte keine auswertbare Grenze.</summary>
+    Unknown,
+
+    /// <summary>Anfragen pro Minute — in Sekunden vorbei, kein Grund zur Aufregung.</summary>
+    PerMinute,
+
+    /// <summary>Anfragen pro Tag — bis Mitternacht (Pazifik) ist Schluss.</summary>
+    PerDay,
+}
+
+/// <summary>Eine Mengengrenze wurde gerissen (429). <see cref="Scope"/> sagt welche.</summary>
+public class GeminiQuotaException(
+    string message,
+    GeminiQuotaScope scope = GeminiQuotaScope.Unknown,
+    TimeSpan? retryAfter = null) : Exception(message)
+{
+    public GeminiQuotaScope Scope { get; } = scope;
+
+    /// <summary>Von Google genannte Wartezeit; null, wenn er keine nannte.</summary>
+    public TimeSpan? RetryAfter { get; } = retryAfter;
+}
 
 /// <summary>Antwort kam an, passt aber nicht zum erzwungenen Schema.</summary>
 public class GeminiMalformedResponseException(string message) : Exception(message);
@@ -65,7 +88,11 @@ public class GeminiItem
     public NutrientEstimate Estimate { get; set; } = new();
 }
 
-public class GeminiService(HttpClient httpClient, IConfiguration configuration, ILogger<GeminiService> logger)
+public class GeminiService(
+    HttpClient httpClient,
+    IConfiguration configuration,
+    ILogger<GeminiService> logger,
+    TimeProvider timeProvider)
 {
     private const string Endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions";
 
@@ -325,12 +352,105 @@ public class GeminiService(HttpClient httpClient, IConfiguration configuration, 
         }
 
         if (response.StatusCode == HttpStatusCode.TooManyRequests)
-            throw new GeminiQuotaException("Kontingent erschoepft.");
+            throw await ReadQuotaFailureAsync(response, ct);
 
         if (!response.IsSuccessStatusCode)
             throw new GeminiUnavailableException($"Gemini antwortete mit {(int)response.StatusCode}.");
 
         return ExtractPayload(await response.Content.ReadAsStringAsync(ct));
+    }
+
+    /// <summary>
+    /// Liest aus einem 429 heraus, WELCHE Grenze gerissen wurde. Google unterscheidet Minuten-
+    /// und Tagesgrenze nur im Rumpf (<c>error.details[]</c>: <c>QuotaFailure.violations[].quotaId</c>
+    /// und <c>RetryInfo.retryDelay</c>), nicht im Statuscode. Ohne diese Unterscheidung bekommt
+    /// der Nutzer bei 27 Sekunden Wartezeit zu lesen, sein Kontingent sei fuer heute aufgebraucht.
+    ///
+    /// Ins Log gehen nur die ausgelesenen Felder, nie der Rumpf: was Google in eine Fehlermeldung
+    /// schreibt, ist nicht unsere Entscheidung, und der Text der Mahlzeit hat im Log nichts verloren.
+    /// </summary>
+    private async Task<GeminiQuotaException> ReadQuotaFailureAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        string? quotaId = null;
+        TimeSpan? retryAfter = null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+
+            if (doc.RootElement.TryGetProperty("error", out var error)
+                && error.TryGetProperty("details", out var details)
+                && details.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var detail in details.EnumerateArray())
+                {
+                    if (!detail.TryGetProperty("@type", out var typ) || typ.ValueKind != JsonValueKind.String)
+                        continue;
+
+                    var typName = typ.GetString()!;
+
+                    if (quotaId is null && typName.EndsWith("google.rpc.QuotaFailure", StringComparison.Ordinal)
+                        && detail.TryGetProperty("violations", out var violations)
+                        && violations.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var violation in violations.EnumerateArray())
+                        {
+                            if (violation.TryGetProperty("quotaId", out var id) && id.ValueKind == JsonValueKind.String)
+                            {
+                                quotaId = id.GetString();
+                                break;
+                            }
+                        }
+                    }
+
+                    if (retryAfter is null && typName.EndsWith("google.rpc.RetryInfo", StringComparison.Ordinal)
+                        && detail.TryGetProperty("retryDelay", out var delay) && delay.ValueKind == JsonValueKind.String)
+                    {
+                        retryAfter = ParseDuration(delay.GetString());
+                    }
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Ein 429 ohne lesbaren Rumpf bleibt ein 429 — nur eben ohne Begruendung.
+        }
+
+        // Der HTTP-Kopf ist die zweite Quelle: manche 429 tragen ihn statt der RetryInfo.
+        retryAfter ??= response.Headers.RetryAfter?.Delta
+            ?? (response.Headers.RetryAfter?.Date is { } date && date > timeProvider.GetUtcNow()
+                ? date - timeProvider.GetUtcNow()
+                : null);
+
+        var scope = quotaId switch
+        {
+            not null when quotaId.Contains("PerDay", StringComparison.OrdinalIgnoreCase) => GeminiQuotaScope.PerDay,
+            not null when quotaId.Contains("PerMinute", StringComparison.OrdinalIgnoreCase) => GeminiQuotaScope.PerMinute,
+            _ => GeminiQuotaScope.Unknown,
+        };
+
+        logger.LogWarning(
+            "Gemini lehnte mit 429 ab. Grenze: {QuotaId} ({Scope}), genannte Wartezeit: {RetryAfter}.",
+            quotaId ?? "unbenannt",
+            scope,
+            retryAfter?.ToString() ?? "keine");
+
+        return new GeminiQuotaException($"Mengengrenze gerissen ({scope}).", scope, retryAfter);
+    }
+
+    /// <summary>Deutet die Dauer im Protokollpuffer-Format ("27s", "1.5s").</summary>
+    private static TimeSpan? ParseDuration(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !value.EndsWith('s'))
+            return null;
+
+        return double.TryParse(
+            value[..^1],
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var sekunden) && sekunden >= 0
+            ? TimeSpan.FromSeconds(sekunden)
+            : null;
     }
 
     private const string WishInstruction = """
