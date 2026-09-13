@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using NutriTrack.Api.Tests.Infrastructure;
 
@@ -164,6 +165,29 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
         });
 
         Assert.Equal(expected, response.StatusCode);
+    }
+
+    /// <summary>
+    /// Die freundliche Meldung sagt dem Nutzer, was zu tun ist; sie sagt ihm nicht, WARUM. Ein
+    /// Zeitdeckel, ein 500 von Google und ein fehlender Schluessel sehen von aussen gleich aus,
+    /// verlangen aber voellig verschiedene Reaktionen. Der Grund muss also mit raus.
+    /// </summary>
+    [Fact]
+    public async Task ParseMeal_WhenGoogleFails_NamesTheReasonInDetail()
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.Status(HttpStatusCode.InternalServerError);
+
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "ein Apfel" } }
+        });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+
+        var koerper = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("500", koerper.GetProperty("detail").GetString());
     }
 
     [Fact]

@@ -9,7 +9,25 @@ using NutriTrack.Domain.Entities;
 namespace NutriTrack.Api.Services;
 
 /// <summary>Google ist erreichbar, aber nicht nutzbar (Timeout, Netz, 5xx).</summary>
-public class GeminiUnavailableException(string message, Exception? inner = null) : Exception(message, inner);
+public class GeminiUnavailableException(string message, Exception? inner = null) : Exception(message, inner)
+{
+    /// <summary>
+    /// Der Grund in einem Satz, samt der tiefsten Ursache. Zeitdeckel, ein 500 von Google und ein
+    /// abgelaufener Schluessel sehen von aussen gleich aus, verlangen aber verschiedene Reaktionen;
+    /// wer das nicht erfaehrt, tippt sein Essen von Hand ein statt den Schluessel zu erneuern.
+    /// </summary>
+    public string Detail
+    {
+        get
+        {
+            var ursache = InnerException;
+            while (ursache?.InnerException is { } tiefer)
+                ursache = tiefer;
+
+            return ursache is null ? Message : $"{Message} ({ursache.GetType().Name}: {ursache.Message})";
+        }
+    }
+}
 
 /// <summary>Welche Grenze Google gerissen sah. Google beantwortet alle mit demselben 429.</summary>
 public enum GeminiQuotaScope
@@ -159,11 +177,22 @@ public class GeminiService(
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// Der eine Ort, an dem "Gemini ist gerade nichts wert" entsteht. Bis hierher wurde dieser Pfad
+    /// - anders als Mengengrenze und Schemabruch - gar nicht protokolliert: der Grund verschwand
+    /// zwischen Wurf und Endpunkt, und im Log stand nichts. Wer wirft, schreibt es also auch auf.
+    /// </summary>
+    private GeminiUnavailableException Unavailable(string grund, Exception? ursache = null)
+    {
+        logger.LogWarning(ursache, "Gemini nicht nutzbar: {Grund}", grund);
+        return new GeminiUnavailableException(grund, ursache);
+    }
+
     public async Task<GeminiParseResult> ParseAsync(IReadOnlyList<ChatMessage> messages, CancellationToken ct)
     {
         var apiKey = configuration["Gemini:ApiKey"];
         if (string.IsNullOrWhiteSpace(apiKey))
-            throw new GeminiUnavailableException("Gemini:ApiKey fehlt.");
+            throw Unavailable("Gemini:ApiKey fehlt.");
 
         var transcript = new StringBuilder();
         foreach (var message in messages)
@@ -298,7 +327,7 @@ public class GeminiService(
     {
         var apiKey = configuration["Gemini:ApiKey"];
         if (string.IsNullOrWhiteSpace(apiKey))
-            throw new GeminiUnavailableException("Gemini:ApiKey fehlt.");
+            throw Unavailable("Gemini:ApiKey fehlt.");
 
         var model = configuration["Gemini:Model"] is { Length: > 0 } configured
             ? configured
@@ -344,18 +373,18 @@ public class GeminiService(
         catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
         {
             // Timeout des HttpClient, nicht Abbruch durch den Aufrufer.
-            throw new GeminiUnavailableException("Gemini hat nicht rechtzeitig geantwortet.", ex);
+            throw Unavailable("Gemini hat nicht rechtzeitig geantwortet.", ex);
         }
         catch (HttpRequestException ex)
         {
-            throw new GeminiUnavailableException("Gemini ist nicht erreichbar.", ex);
+            throw Unavailable("Gemini ist nicht erreichbar.", ex);
         }
 
         if (response.StatusCode == HttpStatusCode.TooManyRequests)
             throw await ReadQuotaFailureAsync(response, ct);
 
         if (!response.IsSuccessStatusCode)
-            throw new GeminiUnavailableException($"Gemini antwortete mit {(int)response.StatusCode}.");
+            throw Unavailable($"Gemini antwortete mit {(int)response.StatusCode}.");
 
         return ExtractPayload(await response.Content.ReadAsStringAsync(ct));
     }

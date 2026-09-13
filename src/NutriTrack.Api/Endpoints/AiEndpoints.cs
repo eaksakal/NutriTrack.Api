@@ -52,19 +52,21 @@ public static class AiEndpoints
             {
                 return AiQuotaResponse.From(ex, httpResponse);
             }
-            catch (GeminiMalformedResponseException)
+            catch (GeminiMalformedResponseException ex)
             {
                 // Ein Wiederholungsversuch steckt bereits im Assistenten; kommt es hier an,
                 // hat auch der zweite Anlauf Unsinn geliefert.
-                return Results.Json(
-                    new { Error = "Die KI hat unverständlich geantwortet. Formuliere es bitte anders." },
-                    statusCode: StatusCodes.Status502BadGateway);
+                return AiFailureResponse.From(
+                    ex,
+                    "Die KI hat unverständlich geantwortet. Formuliere es bitte anders.",
+                    StatusCodes.Status502BadGateway);
             }
-            catch (GeminiUnavailableException)
+            catch (GeminiUnavailableException ex)
             {
-                return Results.Json(
-                    new { Error = "Die KI ist gerade nicht erreichbar." },
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
+                return AiFailureResponse.From(
+                    ex,
+                    "Die KI ist gerade nicht erreichbar.",
+                    StatusCodes.Status503ServiceUnavailable);
             }
         });
     }

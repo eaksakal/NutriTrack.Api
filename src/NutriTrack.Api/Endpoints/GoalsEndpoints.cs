@@ -108,9 +108,10 @@ public static class GoalsEndpoints
                 }
                 catch (Exception ex) when (ex is GeminiUnavailableException or GeminiMalformedResponseException)
                 {
-                    return Results.Json(
-                        new { Error = "Die KI ist gerade nicht erreichbar. Du kannst die Ziele von Hand eintragen." },
-                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                    return AiFailureResponse.From(
+                        ex,
+                        "Die KI ist gerade nicht erreichbar. Du kannst die Ziele von Hand eintragen.",
+                        StatusCodes.Status503ServiceUnavailable);
                 }
             }
 
