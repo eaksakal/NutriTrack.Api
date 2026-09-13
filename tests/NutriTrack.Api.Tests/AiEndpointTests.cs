@@ -626,4 +626,29 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
         Assert.Equal("12", Assert.Single(response.Headers.GetValues("Retry-After")));
         Assert.Contains("12 Sekunden", await response.Content.ReadAsStringAsync());
     }
+
+    /// <summary>
+    /// Die ganze Kette am echten Umschlag: Googles Fliesstext -> Wartezeit -> der Satz, den der
+    /// Nutzer liest. Vorher stand dort "Versuche es gleich noch einmal", obwohl Google die
+    /// Sekunden mitgeschickt hatte - "gleich" laesst offen, ob man 5 Sekunden oder 5 Minuten
+    /// wartet, und wer zu frueh wiederkommt, reisst die Grenze gleich noch einmal.
+    /// </summary>
+    [Fact]
+    public async Task ParseMeal_BeiFlachemQuotaFehler_NenntDieSekundenUndSetztRetryAfter()
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.InteractionsQuotaFailure(retryIn: "39.826942774s");
+
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "ein Apfel" } }
+        });
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+
+        // Aufgerundet: wer die Nachkommastellen abschnitte, kaeme eine Zehntelsekunde zu frueh.
+        Assert.Equal("40", Assert.Single(response.Headers.GetValues("Retry-After")));
+        Assert.Contains("40 Sekunden", await response.Content.ReadAsStringAsync());
+    }
 }

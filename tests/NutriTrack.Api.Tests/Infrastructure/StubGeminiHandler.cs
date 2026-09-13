@@ -99,6 +99,46 @@ public sealed class StubGeminiHandler(Func<HttpRequestMessage, HttpResponseMessa
         };
     }
 
+    /// <summary>
+    /// Der 429, den die Interactions-API WIRKLICH schickt. Am 2026-09-13 vom Betriebsrechner
+    /// gegen den echten Dienst abgeholt, Wortlaut uebernommen (nur Metrik und Wartezeit sind
+    /// hier veraenderlich).
+    ///
+    /// Er hat mit <see cref="QuotaFailure"/> nichts gemein: KEIN <c>details[]</c>, <c>code</c>
+    /// ist die Zeichenkette "too_many_requests" statt der Zahl 429, und Grenze wie Wartezeit
+    /// stecken im Fliesstext von <c>message</c>. Die alte Form gehoert zur aelteren
+    /// generateContent-API; gegen sie allein zu pruefen hiess, eine Erfindung zu bestaetigen -
+    /// im Betrieb lief JEDER 429 als Unknown und ohne Wartezeit durch.
+    /// </summary>
+    public static HttpResponseMessage InteractionsQuotaFailure(
+        string metric = "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+        string? retryIn = "39.826942774s")
+    {
+        var nachsatz = retryIn is null ? "" : $"\nPlease retry in {retryIn}.";
+
+        var message =
+            "You exceeded your current quota, please check your plan and billing details. "
+            + "For more information on this error, head to: "
+            + "https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, "
+            + "head to: https://ai.dev/rate-limit. "
+            + $"\n* Quota exceeded for metric: {metric}, limit: 20, model: gemini-3.5-flash"
+            + nachsatz;
+
+        // Das Escaping macht der Serializer. Von Hand gesetzt landete der echte Zeilenumbruch
+        // roh im JSON-String - ungueltiges JSON, das der Dienst stillschweigend verwirft, und
+        // der Test prueft dann die leere Ausrede statt den Umschlag.
+        var escaped = System.Text.Json.JsonSerializer.Serialize(message);
+
+        var body = $$"""
+        { "error": { "message": {{escaped}}, "code": "too_many_requests" } }
+        """;
+
+        return new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json")
+        };
+    }
+
     /// <summary>429 ohne auswertbare Details — nur der HTTP-Kopf <c>Retry-After</c>.</summary>
     public static HttpResponseMessage TooManyRequestsWithRetryAfterHeader(int seconds)
     {

@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using NutriTrack.Api.Contracts.Ai;
 using NutriTrack.Domain.Entities;
 
@@ -407,36 +408,55 @@ public class GeminiService(
         {
             using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
 
-            if (doc.RootElement.TryGetProperty("error", out var error)
-                && error.TryGetProperty("details", out var details)
-                && details.ValueKind == JsonValueKind.Array)
+            if (doc.RootElement.TryGetProperty("error", out var error))
             {
-                foreach (var detail in details.EnumerateArray())
+                if (error.TryGetProperty("details", out var details)
+                    && details.ValueKind == JsonValueKind.Array)
                 {
-                    if (!detail.TryGetProperty("@type", out var typ) || typ.ValueKind != JsonValueKind.String)
-                        continue;
-
-                    var typName = typ.GetString()!;
-
-                    if (quotaId is null && typName.EndsWith("google.rpc.QuotaFailure", StringComparison.Ordinal)
-                        && detail.TryGetProperty("violations", out var violations)
-                        && violations.ValueKind == JsonValueKind.Array)
+                    foreach (var detail in details.EnumerateArray())
                     {
-                        foreach (var violation in violations.EnumerateArray())
+                        if (!detail.TryGetProperty("@type", out var typ) || typ.ValueKind != JsonValueKind.String)
+                            continue;
+
+                        var typName = typ.GetString()!;
+
+                        if (quotaId is null && typName.EndsWith("google.rpc.QuotaFailure", StringComparison.Ordinal)
+                            && detail.TryGetProperty("violations", out var violations)
+                            && violations.ValueKind == JsonValueKind.Array)
                         {
-                            if (violation.TryGetProperty("quotaId", out var id) && id.ValueKind == JsonValueKind.String)
+                            foreach (var violation in violations.EnumerateArray())
                             {
-                                quotaId = id.GetString();
-                                break;
+                                if (violation.TryGetProperty("quotaId", out var id) && id.ValueKind == JsonValueKind.String)
+                                {
+                                    quotaId = id.GetString();
+                                    break;
+                                }
                             }
                         }
-                    }
 
-                    if (retryAfter is null && typName.EndsWith("google.rpc.RetryInfo", StringComparison.Ordinal)
-                        && detail.TryGetProperty("retryDelay", out var delay) && delay.ValueKind == JsonValueKind.String)
-                    {
-                        retryAfter = ParseDuration(delay.GetString());
+                        if (retryAfter is null && typName.EndsWith("google.rpc.RetryInfo", StringComparison.Ordinal)
+                            && detail.TryGetProperty("retryDelay", out var delay) && delay.ValueKind == JsonValueKind.String)
+                        {
+                            retryAfter = ParseDuration(delay.GetString());
+                        }
                     }
+                }
+
+                // Die flache Form der Interactions-API. Sie hat kein details[]: Metrik und
+                // Wartezeit stehen im Fliesstext von message. Am 2026-09-13 im Betrieb gemessen -
+                // bis dahin lief JEDER 429 als Unknown und ohne Wartezeit durch, weil oben nach
+                // einem Feld gesucht wurde, das dieser Dienst gar nicht schickt.
+                if ((quotaId is null || retryAfter is null)
+                    && error.TryGetProperty("message", out var message)
+                    && message.ValueKind == JsonValueKind.String)
+                {
+                    var text = message.GetString()!;
+
+                    if (quotaId is null && MetrikImText.Match(text) is { Success: true } m)
+                        quotaId = m.Groups[1].Value;
+
+                    if (retryAfter is null && WartezeitImText.Match(text) is { Success: true } w)
+                        retryAfter = ParseDuration(w.Groups[1].Value + "s");
                 }
             }
         }
@@ -451,10 +471,15 @@ public class GeminiService(
                 ? date - timeProvider.GetUtcNow()
                 : null);
 
-        var scope = quotaId switch
+        // Beide Umschlaege benennen dieselbe Sache anders: "GenerateRequestsPerDayPerProjectPerModel"
+        // gegen "...generate_requests_per_model_per_day". Ohne die Trennzeichen zu entfernen,
+        // faende Contains("PerDay") die zweite Schreibweise nie.
+        var normalisiert = quotaId?.Replace("_", "").Replace("-", "");
+
+        var scope = normalisiert switch
         {
-            not null when quotaId.Contains("PerDay", StringComparison.OrdinalIgnoreCase) => GeminiQuotaScope.PerDay,
-            not null when quotaId.Contains("PerMinute", StringComparison.OrdinalIgnoreCase) => GeminiQuotaScope.PerMinute,
+            not null when normalisiert.Contains("PerDay", StringComparison.OrdinalIgnoreCase) => GeminiQuotaScope.PerDay,
+            not null when normalisiert.Contains("PerMinute", StringComparison.OrdinalIgnoreCase) => GeminiQuotaScope.PerMinute,
             _ => GeminiQuotaScope.Unknown,
         };
 
@@ -466,6 +491,14 @@ public class GeminiService(
 
         return new GeminiQuotaException($"Mengengrenze gerissen ({scope}).", scope, retryAfter);
     }
+
+    /// <summary>"* Quota exceeded for metric: <c>&lt;name&gt;</c>, limit: 20, model: ..."</summary>
+    private static readonly Regex MetrikImText =
+        new(@"Quota exceeded for metric:\s*([^\s,]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>"Please retry in 39.826942774s."</summary>
+    private static readonly Regex WartezeitImText =
+        new(@"retry in\s*([0-9]+(?:\.[0-9]+)?)\s*s", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>Deutet die Dauer im Protokollpuffer-Format ("27s", "1.5s").</summary>
     private static TimeSpan? ParseDuration(string? value)

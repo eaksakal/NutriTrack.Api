@@ -298,6 +298,85 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
     }
 
     /// <summary>Ohne auswertbare Details bleibt der HTTP-Kopf als Quelle der Wartezeit.</summary>
+    /// <summary>
+    /// Der Umschlag, den die Interactions-API wirklich schickt. Die Wartezeit steht darin nur im
+    /// Fliesstext ("Please retry in 39.826942774s.") - wird sie nicht gelesen, liest der Nutzer
+    /// "versuche es gleich noch einmal", obwohl Google die Sekunden nennt.
+    /// </summary>
+    [Fact]
+    public async Task ParseAsync_BeiFlachemQuotaFehler_LiestDieWartezeitAusDemText()
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.InteractionsQuotaFailure();
+
+        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "ein Apfel" }],
+            CancellationToken.None));
+
+        Assert.Equal(TimeSpan.FromSeconds(39.826942774), ex.RetryAfter);
+    }
+
+    /// <summary>
+    /// Auch im flachen Umschlag steht die Metrik. Nennt sie das Fenster, muss die Unterscheidung
+    /// greifen - sonst haette das Nachziehen nur die halbe Arbeit getan.
+    /// </summary>
+    [Theory]
+    [InlineData("generativelanguage.googleapis.com/generate_requests_per_model_per_day", GeminiQuotaScope.PerDay)]
+    [InlineData("generativelanguage.googleapis.com/generate_requests_per_model_per_minute", GeminiQuotaScope.PerMinute)]
+    [InlineData("generativelanguage.googleapis.com/generate_content_free_tier_requests", GeminiQuotaScope.Unknown)]
+    public async Task ParseAsync_BeiFlachemQuotaFehler_DeutetDieMetrik(string metric, GeminiQuotaScope erwartet)
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.InteractionsQuotaFailure(metric);
+
+        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "ein Apfel" }],
+            CancellationToken.None));
+
+        Assert.Equal(erwartet, ex.Scope);
+    }
+
+    /// <summary>
+    /// Der Rumpf Zeichen fuer Zeichen so, wie ihn der Betriebsrechner am 2026-09-13 um 20:31 UTC
+    /// von Google bekam. Der Test daneben baut denselben Umschlag aus Bausteinen zusammen und
+    /// koennte dabei meine Annahme wiederholen statt Googles Wirklichkeit; dieser hier kann das
+    /// nicht. Faellt er, hat Google das Format geaendert - und nicht wir.
+    /// </summary>
+    [Fact]
+    public async Task ParseAsync_BeimEchtenAufgezeichnetenRumpf_LiestGrenzeUndWartezeit()
+    {
+        const string echterRumpf =
+            """
+            {"error":{"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.5-flash\nPlease retry in 39.826942774s.","code":"too_many_requests"}}
+            """;
+
+        factory.GeminiResponder = _ => new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+        {
+            Content = new StringContent(echterRumpf, System.Text.Encoding.UTF8, "application/json")
+        };
+
+        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "ein Apfel" }],
+            CancellationToken.None));
+
+        Assert.Equal(TimeSpan.FromSeconds(39.826942774), ex.RetryAfter);
+
+        // Diese Metrik nennt weder Minute noch Tag - dann wird auch keins von beidem behauptet.
+        Assert.Equal(GeminiQuotaScope.Unknown, ex.Scope);
+    }
+
+    /// <summary>Nennt Google keine Wartezeit, wird auch keine erfunden.</summary>
+    [Fact]
+    public async Task ParseAsync_BeiFlachemQuotaFehlerOhneWartezeit_LaesstSieOffen()
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.InteractionsQuotaFailure(retryIn: null);
+
+        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "ein Apfel" }],
+            CancellationToken.None));
+
+        Assert.Null(ex.RetryAfter);
+        Assert.Equal(GeminiQuotaScope.Unknown, ex.Scope);
+    }
+
     [Fact]
     public async Task ParseAsync_BeiQuotaFehlerOhneDetails_NimmtDenRetryAfterKopf()
     {
