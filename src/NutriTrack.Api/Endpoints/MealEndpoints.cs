@@ -18,6 +18,16 @@ public static class MealEndpoints
     private static bool IsValidQuantity(decimal quantityInGrams) =>
         quantityInGrams > 0 && quantityInGrams <= MaxQuantityInGrams;
 
+    // Laenge der Vorschlagsliste in /recent. Acht Zeilen passen ohne Scrollen ueber das
+    // Eingabefeld und decken den Alltag ab (Kaffee, Brot, Joghurt, ...).
+    private const int DefaultRecentLimit = 8;
+    private const int MaxRecentLimit = 50;
+
+    // So viele der juengsten Eintraege werden fuer /recent geladen, bevor je Lebensmittel
+    // entdoppelt wird. Deckt auch den Fall ab, dass dasselbe Lebensmittel viele Male in Folge
+    // vorkommt, und deckelt zugleich, was ein Aufruf in den Speicher holt.
+    private const int RecentScanWindow = 200;
+
     // Ein Jahr plus Schalttag: der laengste Zeitraum, den die Auswertung im Frontend sinnvoll als
     // Tagesstreifen zeichnet. Die Grenze deckelt zugleich die Zeilenzahl, die /period unaggregiert
     // in den Speicher holt.
@@ -244,6 +254,89 @@ public static class MealEndpoints
                 },
                 Days = days
             });
+        });
+
+        // Denselben Posten noch einmal eintragen - der zweite Kaffee des Tages, nur auf einer
+        // anderen Mahlzeit. Es entsteht ein EIGENER Eintrag; die Menge des ersten anzuheben waere
+        // etwas anderes: die Uhrzeit ginge verloren, und beim Loeschen verschwaenden beide.
+        group.MapPost("/{id:guid}/repeat", async (Guid id, RepeatMealEntryRequest? request, ClaimsPrincipal user, AppDbContext db) =>
+        {
+            var userId = user.FindFirst(ClaimTypes.NameIdentifier)!.Value;
+
+            var source = await db.MealEntries
+                .Include(m => m.FoodItem)
+                .FirstOrDefaultAsync(m => m.Id == id && m.UserId == userId);
+
+            // 404 statt 403 bei fremden Eintraegen, wie im PUT und DELETE.
+            if (source is null)
+                return Results.NotFound();
+
+            var quantity = request?.QuantityInGrams ?? source.QuantityInGrams;
+            if (!IsValidQuantity(quantity))
+                return Results.BadRequest(new { Error = QuantityError });
+
+            var mealType = source.MealType;
+            if (!string.IsNullOrWhiteSpace(request?.MealType))
+            {
+                if (!TryParseMealType(request.MealType, out var gewaehlt))
+                    return Results.BadRequest(new { Error = MealTypeError });
+                mealType = gewaehlt;
+            }
+
+            var localNow = DateTime.Now;
+
+            var entry = new MealEntry
+            {
+                Id = Guid.NewGuid(),
+                UserId = userId,
+                // Kein neuer FoodItem: die Naehrwerte des Originals gelten unveraendert weiter.
+                FoodItemId = source.FoodItemId,
+                QuantityInGrams = quantity,
+                MealType = mealType,
+                // Ohne Angabe heute und jetzt, nicht Datum und Uhrzeit des Originals: wiederholt
+                // wird das Essen, nicht der Zeitpunkt.
+                Date = request?.Date ?? DateOnly.FromDateTime(localNow),
+                Time = request?.Time ?? TimeOnly.FromDateTime(localNow),
+                CreatedAt = DateTime.UtcNow
+            };
+
+            db.MealEntries.Add(entry);
+            await db.SaveChangesAsync();
+
+            return Results.Created($"/api/meals/{entry.Id}", MapToResponse(entry, source.FoodItem));
+        });
+
+        // Zuletzt Gegessenes als Vorlage zum Wiedereintragen. Je Lebensmittel nur der juengste
+        // Eintrag: wer zehn Tage hintereinander denselben Kaffee trinkt, bekommt sonst eine Liste
+        // aus zehnmal Kaffee und sieht nichts anderes mehr.
+        group.MapGet("/recent", async (ClaimsPrincipal user, AppDbContext db, int? limit) =>
+        {
+            var userId = user.FindFirst(ClaimTypes.NameIdentifier)!.Value;
+            var anzahl = Math.Clamp(limit ?? DefaultRecentLimit, 1, MaxRecentLimit);
+
+            // Erst ein Fenster der juengsten Eintraege holen, dann im Speicher entdoppeln: die
+            // Gruppierung je FoodItem laesst sich in SQL nicht ohne Weiteres mit "nimm die ganze
+            // Zeile des Juengsten" verbinden, und die gesamte Historie dafuer zu laden waere bei
+            // langer Nutzung teuer. Das Fenster ist gross genug, dass auch bei viel Wiederholung
+            // genug verschiedene Lebensmittel darin vorkommen.
+            var fenster = await db.MealEntries
+                .Include(m => m.FoodItem)
+                .Where(m => m.UserId == userId)
+                .OrderByDescending(m => m.Date)
+                .ThenByDescending(m => m.Time)
+                .Take(RecentScanWindow)
+                .ToListAsync();
+
+            // GroupBy behaelt in LINQ-to-Objects die Reihenfolge des ersten Vorkommens, und das
+            // Fenster ist bereits absteigend sortiert: First() ist damit der juengste Eintrag je
+            // Lebensmittel, und die Gruppen stehen weiterhin "zuletzt gegessen zuerst".
+            var recent = fenster
+                .GroupBy(m => m.FoodItemId)
+                .Select(g => g.First())
+                .Take(anzahl)
+                .Select(m => MapToResponse(m, m.FoodItem));
+
+            return Results.Ok(recent);
         });
 
         group.MapPut("/{id:guid}", async (Guid id, UpdateMealEntryRequest request, ClaimsPrincipal user, AppDbContext db) =>

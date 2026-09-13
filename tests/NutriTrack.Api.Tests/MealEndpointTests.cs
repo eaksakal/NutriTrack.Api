@@ -769,4 +769,161 @@ public class MealEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nut
         Assert.Equal(180m, single.QuantityInGrams);
         Assert.Equal(450.00m, single.Calories);
     }
+
+    [Fact]
+    public async Task Repeat_CreatesSecondEntryOnChosenMealType()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+        var date = new DateOnly(2026, 4, 7);
+
+        var created = await client.PostAsJsonAsync("/api/meals", OatsPayload(150m, "Breakfast", date));
+        var original = await created.Content.ReadFromJsonAsync<MealEntryResponse>();
+        Assert.NotNull(original);
+
+        var repeated = await client.PostAsJsonAsync($"/api/meals/{original!.Id}/repeat", new
+        {
+            mealType = "Lunch",
+            date = date.ToString("yyyy-MM-dd")
+        });
+
+        Assert.Equal(HttpStatusCode.Created, repeated.StatusCode);
+
+        var copy = await repeated.Content.ReadFromJsonAsync<MealEntryResponse>();
+        Assert.NotNull(copy);
+        // Ein eigener Eintrag, nicht die erhoehte Menge des ersten.
+        Assert.NotEqual(original.Id, copy!.Id);
+        Assert.Equal("Lunch", copy.MealType);
+        Assert.Equal(150m, copy.QuantityInGrams);
+        Assert.Equal(original.Calories, copy.Calories);
+        Assert.Equal(original.FoodName, copy.FoodName);
+
+        var entries = await client.GetFromJsonAsync<List<MealEntryResponse>>($"/api/meals?date={date:yyyy-MM-dd}");
+        Assert.Equal(2, entries!.Count);
+    }
+
+    [Fact]
+    public async Task Repeat_WithoutBody_KeepsQuantityAndMealTypeOfOriginal()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+        var heute = DateOnly.FromDateTime(DateTime.Now);
+
+        var created = await client.PostAsJsonAsync("/api/meals", OatsPayload(75m, "Dinner", heute));
+        var original = await created.Content.ReadFromJsonAsync<MealEntryResponse>();
+
+        var repeated = await client.PostAsJsonAsync($"/api/meals/{original!.Id}/repeat", new { });
+        var copy = await repeated.Content.ReadFromJsonAsync<MealEntryResponse>();
+
+        Assert.Equal(HttpStatusCode.Created, repeated.StatusCode);
+        Assert.Equal("Dinner", copy!.MealType);
+        Assert.Equal(75m, copy.QuantityInGrams);
+        // Ohne Datum gilt heute - wiederholt wird das Essen, nicht der Zeitpunkt.
+        Assert.Equal(heute, copy.Date);
+    }
+
+    [Fact]
+    public async Task Repeat_ReusesSameFoodItemInsteadOfCreatingADuplicate()
+    {
+        var (client, _, userId) = await factory.CreateUserAsync();
+        var date = new DateOnly(2026, 4, 8);
+
+        var created = await client.PostAsJsonAsync("/api/meals", OatsPayload(120m, "Breakfast", date));
+        var original = await created.Content.ReadFromJsonAsync<MealEntryResponse>();
+
+        await client.PostAsJsonAsync($"/api/meals/{original!.Id}/repeat", new
+        {
+            mealType = "Snack",
+            date = date.ToString("yyyy-MM-dd")
+        });
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var foodItemIds = await db.MealEntries
+            .Where(m => m.UserId == userId)
+            .Select(m => m.FoodItemId)
+            .Distinct()
+            .ToListAsync();
+
+        Assert.Single(foodItemIds);
+    }
+
+    [Theory]
+    [InlineData("Brunch")]
+    [InlineData("99")]
+    public async Task Repeat_WithInvalidMealType_ReturnsBadRequest(string mealType)
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var created = await client.PostAsJsonAsync("/api/meals", OatsPayload(100m, date: new DateOnly(2026, 4, 9)));
+        var original = await created.Content.ReadFromJsonAsync<MealEntryResponse>();
+
+        var repeated = await client.PostAsJsonAsync($"/api/meals/{original!.Id}/repeat", new { mealType });
+
+        Assert.Equal(HttpStatusCode.BadRequest, repeated.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-50)]
+    [InlineData(10001)]
+    public async Task Repeat_WithInvalidQuantity_ReturnsBadRequest(decimal quantity)
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var created = await client.PostAsJsonAsync("/api/meals", OatsPayload(100m, date: new DateOnly(2026, 4, 10)));
+        var original = await created.Content.ReadFromJsonAsync<MealEntryResponse>();
+
+        var repeated = await client.PostAsJsonAsync($"/api/meals/{original!.Id}/repeat", new { quantityInGrams = quantity });
+
+        Assert.Equal(HttpStatusCode.BadRequest, repeated.StatusCode);
+    }
+
+    [Fact]
+    public async Task Repeat_OfForeignEntry_ReturnsNotFound()
+    {
+        var (owner, _, _) = await factory.CreateUserAsync();
+        var (intruder, _, _) = await factory.CreateUserAsync();
+
+        var created = await owner.PostAsJsonAsync("/api/meals", OatsPayload(100m, date: new DateOnly(2026, 4, 11)));
+        var original = await created.Content.ReadFromJsonAsync<MealEntryResponse>();
+
+        var repeated = await intruder.PostAsJsonAsync($"/api/meals/{original!.Id}/repeat", new { mealType = "Lunch" });
+
+        Assert.Equal(HttpStatusCode.NotFound, repeated.StatusCode);
+    }
+
+    [Fact]
+    public async Task Recent_ListsEachFoodOnlyOnceWithNewestFirst()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        // Haferflocken zweimal, an verschiedenen Tagen - die Banane liegt dazwischen.
+        await client.PostAsJsonAsync("/api/meals", OatsPayload(100m, date: new DateOnly(2026, 5, 1)));
+        await client.PostAsJsonAsync("/api/meals", BananaPayload(120m, date: new DateOnly(2026, 5, 2)));
+        await client.PostAsJsonAsync("/api/meals", OatsPayload(200m, date: new DateOnly(2026, 5, 3)));
+
+        var recent = await client.GetFromJsonAsync<List<MealEntryResponse>>("/api/meals/recent");
+
+        Assert.Equal(2, recent!.Count);
+        Assert.Equal("Haferflocken", recent[0].FoodName);
+        // Der juengste der beiden Haferflocken-Eintraege, also 200 g.
+        Assert.Equal(200m, recent[0].QuantityInGrams);
+        Assert.Equal("Banane", recent[1].FoodName);
+    }
+
+    [Fact]
+    public async Task Recent_RespectsLimitAndIgnoresForeignEntries()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+        var (other, _, _) = await factory.CreateUserAsync();
+
+        await other.PostAsJsonAsync("/api/meals", BananaPayload(90m, date: new DateOnly(2026, 5, 4)));
+        await client.PostAsJsonAsync("/api/meals", OatsPayload(100m, date: new DateOnly(2026, 5, 5)));
+        await client.PostAsJsonAsync("/api/meals", BananaPayload(110m, date: new DateOnly(2026, 5, 6)));
+
+        var recent = await client.GetFromJsonAsync<List<MealEntryResponse>>("/api/meals/recent?limit=1");
+
+        var single = Assert.Single(recent!);
+        Assert.Equal("Banane", single.FoodName);
+        Assert.Equal(110m, single.QuantityInGrams);
+    }
 }
