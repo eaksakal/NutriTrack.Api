@@ -414,6 +414,191 @@ public class MealEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nut
         Assert.Equal(250.00m, summary.TotalCalories);
     }
 
+    private static string PeriodUrl(DateOnly from, DateOnly to) =>
+        $"/api/meals/period?from={from:yyyy-MM-dd}&to={to:yyyy-MM-dd}";
+
+    [Fact]
+    public async Task Period_AveragesOverDaysWithEntriesOnly()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+        var from = new DateOnly(2026, 2, 2);
+        var to = new DateOnly(2026, 2, 8);
+
+        // Zwei erfasste Tage in einer ganzen Woche.
+        await client.PostAsJsonAsync("/api/meals", OatsPayload(250m, date: from));
+        await client.PostAsJsonAsync("/api/meals", BananaPayload(150m, date: new DateOnly(2026, 2, 5)));
+
+        var summary = await client.GetFromJsonAsync<PeriodSummaryResponse>(PeriodUrl(from, to));
+
+        Assert.NotNull(summary);
+        Assert.Equal(from, summary!.From);
+        Assert.Equal(to, summary.To);
+        Assert.Equal(7, summary.DaysInPeriod);
+        Assert.Equal(2, summary.DaysWithEntries);
+
+        // Summe 758.50 / 32.90 / 109.20 / 20.95 / 14.90 geteilt durch 2, NICHT durch 7.
+        // Durch 7 waeren es 108.36 kcal - die fuenf leeren Tage wuerden den Schnitt verfaelschen.
+        Assert.Equal(379.25m, summary.Averages.Calories);
+        Assert.Equal(16.45m, summary.Averages.Protein);
+        Assert.Equal(54.60m, summary.Averages.Carbohydrates);
+        Assert.Equal(10.48m, summary.Averages.Fat);
+        Assert.Equal(7.45m, summary.Averages.Fiber);
+    }
+
+    [Fact]
+    public async Task Period_ListsEveryCalendarDayIncludingEmptyOnes()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+        var from = new DateOnly(2026, 2, 9);
+        var to = new DateOnly(2026, 2, 15);
+        var filled = new DateOnly(2026, 2, 11);
+
+        await client.PostAsJsonAsync("/api/meals", OatsPayload(250m, date: filled));
+
+        var summary = await client.GetFromJsonAsync<PeriodSummaryResponse>(PeriodUrl(from, to));
+
+        Assert.NotNull(summary);
+        Assert.Equal(7, summary!.Days.Count);
+
+        // Luecken sind Teil der Antwort - das Frontend muss sie im Tagesstreifen sehen.
+        Assert.Equal(Enumerable.Range(0, 7).Select(from.AddDays), summary.Days.Select(d => d.Date));
+
+        var day = Assert.Single(summary.Days, d => d.Date == filled);
+        Assert.Equal(1, day.TotalEntries);
+        Assert.Equal(625.00m, day.TotalCalories);
+        Assert.Equal(31.25m, day.TotalProtein);
+        Assert.Equal(75.00m, day.TotalCarbohydrates);
+        Assert.Equal(20.50m, day.TotalFat);
+
+        Assert.All(summary.Days.Where(d => d.Date != filled), d =>
+        {
+            Assert.Equal(0, d.TotalEntries);
+            Assert.Equal(0m, d.TotalCalories);
+            Assert.Equal(0m, d.TotalProtein);
+            Assert.Equal(0m, d.TotalCarbohydrates);
+            Assert.Equal(0m, d.TotalFat);
+        });
+    }
+
+    [Fact]
+    public async Task Period_WithoutAnyEntries_ReturnsZeroAveragesInsteadOfError()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+        var from = new DateOnly(2026, 2, 16);
+        var to = new DateOnly(2026, 2, 22);
+
+        var response = await client.GetAsync(PeriodUrl(from, to));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var summary = await response.Content.ReadFromJsonAsync<PeriodSummaryResponse>();
+        Assert.NotNull(summary);
+        Assert.Equal(0, summary!.DaysWithEntries);
+        Assert.Equal(7, summary.DaysInPeriod);
+        Assert.Equal(7, summary.Days.Count);
+
+        Assert.Equal(0m, summary.Averages.Calories);
+        Assert.Equal(0m, summary.Averages.Protein);
+        Assert.Equal(0m, summary.Averages.Carbohydrates);
+        Assert.Equal(0m, summary.Averages.Fat);
+        Assert.Equal(0m, summary.Averages.Fiber);
+        Assert.Equal(0m, summary.Averages.Sodium);
+        Assert.Equal(0m, summary.Averages.VitaminD);
+        Assert.Equal(0m, summary.Averages.Potassium);
+    }
+
+    [Fact]
+    public async Task Period_WithSingleDay_AveragesEqualThatDay()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+        var date = new DateOnly(2026, 2, 23);
+
+        await client.PostAsJsonAsync("/api/meals", OatsPayload(250m, date: date));
+        await client.PostAsJsonAsync("/api/meals", BananaPayload(150m, date: date));
+
+        var summary = await client.GetFromJsonAsync<PeriodSummaryResponse>(PeriodUrl(date, date));
+
+        Assert.NotNull(summary);
+        Assert.Equal(1, summary!.DaysInPeriod);
+        Assert.Equal(1, summary.DaysWithEntries);
+        Assert.Equal(758.50m, summary.Averages.Calories);
+
+        var day = Assert.Single(summary.Days);
+        Assert.Equal(2, day.TotalEntries);
+        Assert.Equal(758.50m, day.TotalCalories);
+    }
+
+    [Fact]
+    public async Task Period_WithStartAfterEnd_ReturnsBadRequest()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var response = await client.GetAsync(PeriodUrl(new DateOnly(2026, 3, 10), new DateOnly(2026, 3, 9)));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.False(string.IsNullOrWhiteSpace((await response.ReadJsonAsync()).GetProperty("error").GetString()));
+    }
+
+    [Fact]
+    public async Task Period_LongerThan366Days_ReturnsBadRequest()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+        var from = new DateOnly(2026, 1, 1);
+
+        var allowed = await client.GetAsync(PeriodUrl(from, from.AddDays(365)));
+        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
+
+        var summary = await allowed.Content.ReadFromJsonAsync<PeriodSummaryResponse>();
+        Assert.Equal(366, summary!.DaysInPeriod);
+        Assert.Equal(366, summary.Days.Count);
+
+        // Ein Tag mehr ist einer zu viel.
+        var tooLong = await client.GetAsync(PeriodUrl(from, from.AddDays(366)));
+        Assert.Equal(HttpStatusCode.BadRequest, tooLong.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("/api/meals/period")]
+    [InlineData("/api/meals/period?from=2026-04-01")]
+    [InlineData("/api/meals/period?to=2026-04-07")]
+    public async Task Period_WithMissingParameters_ReturnsBadRequest(string url)
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var response = await client.GetAsync(url);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Period_IgnoresEntriesOfOtherUsers()
+    {
+        var (owner, _, _) = await factory.CreateUserAsync();
+        var (other, _, _) = await factory.CreateUserAsync();
+        var from = new DateOnly(2026, 12, 1);
+        var to = new DateOnly(2026, 12, 7);
+
+        await owner.PostAsJsonAsync("/api/meals", OatsPayload(250m, date: from));
+        await other.PostAsJsonAsync("/api/meals", OatsPayload(250m, date: from));
+        await other.PostAsJsonAsync("/api/meals", BananaPayload(150m, date: to));
+
+        var summary = await owner.GetFromJsonAsync<PeriodSummaryResponse>(PeriodUrl(from, to));
+
+        Assert.NotNull(summary);
+        Assert.Equal(1, summary!.DaysWithEntries);
+        Assert.Equal(625.00m, summary.Averages.Calories);
+        Assert.Equal(1, summary.Days.Sum(d => d.TotalEntries));
+    }
+
+    [Fact]
+    public async Task Period_WithoutToken_ReturnsUnauthorized()
+    {
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync(PeriodUrl(new DateOnly(2026, 4, 1), new DateOnly(2026, 4, 7)));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
     [Fact]
     public async Task Update_ChangesQuantityAndRecalculatesNutrients()
     {

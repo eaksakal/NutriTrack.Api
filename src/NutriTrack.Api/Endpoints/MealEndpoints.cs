@@ -18,6 +18,11 @@ public static class MealEndpoints
     private static bool IsValidQuantity(decimal quantityInGrams) =>
         quantityInGrams > 0 && quantityInGrams <= MaxQuantityInGrams;
 
+    // Ein Jahr plus Schalttag: der laengste Zeitraum, den die Auswertung im Frontend sinnvoll als
+    // Tagesstreifen zeichnet. Die Grenze deckelt zugleich die Zeilenzahl, die /period unaggregiert
+    // in den Speicher holt.
+    private const int MaxPeriodDays = 366;
+
     private static readonly string MealTypeError =
         $"Invalid meal type. Use: {string.Join(", ", Enum.GetNames<MealType>())}";
 
@@ -161,6 +166,86 @@ public static class MealEndpoints
             });
         });
 
+        group.MapGet("/period", async (ClaimsPrincipal user, AppDbContext db, DateOnly? from, DateOnly? to) =>
+        {
+            var userId = user.FindFirst(ClaimTypes.NameIdentifier)!.Value;
+
+            // Kein Vorbelegen wie beim Tagesendpunkt: ein Zeitraum ohne Grenzen hat keine
+            // naheliegende Bedeutung, und ein stillschweigend gewaehlter Ausschnitt waere im
+            // Diagramm nicht von einem echten Ergebnis zu unterscheiden.
+            if (from is null || to is null)
+                return Results.BadRequest(new { Error = "Bitte from und to als Datum im Format JJJJ-MM-TT angeben." });
+
+            if (from > to)
+                return Results.BadRequest(new { Error = "Das Startdatum darf nicht nach dem Enddatum liegen." });
+
+            var fromDate = from.Value;
+            var toDate = to.Value;
+            var daysInPeriod = toDate.DayNumber - fromDate.DayNumber + 1;
+
+            if (daysInPeriod > MaxPeriodDays)
+                return Results.BadRequest(new { Error = $"Der Zeitraum darf höchstens {MaxPeriodDays} Tage umfassen." });
+
+            // Wie bei /summary: die Zeilen kommen unaggregiert herein und werden im Speicher
+            // summiert. decimal liegt unter SQLite als TEXT (siehe SqliteConventions), ein SUM()
+            // in SQL waere eine Stringoperation. Der Datumsfilter bleibt in SQL - DateOnly steht
+            // als nullengepolstertes 'yyyy-MM-dd' und ist damit lexikografisch korrekt vergleichbar.
+            var entries = await db.MealEntries
+                .Include(m => m.FoodItem)
+                .Where(m => m.UserId == userId && m.Date >= fromDate && m.Date <= toDate)
+                .ToListAsync();
+
+            var responses = entries.Select(e => MapToResponse(e, e.FoodItem)).ToList();
+            var byDate = responses.GroupBy(r => r.Date).ToDictionary(g => g.Key, g => g.ToList());
+
+            // Ueber die Kalendertage laufen statt ueber die vorhandenen Gruppen: nur so stehen
+            // auch die leeren Tage in der Liste, und die Sortierung ergibt sich von selbst.
+            var days = new List<PeriodDaySummaryResponse>(daysInPeriod);
+            for (var offset = 0; offset < daysInPeriod; offset++)
+            {
+                var date = fromDate.AddDays(offset);
+                var ofDay = byDate.TryGetValue(date, out var found) ? found : [];
+
+                days.Add(new PeriodDaySummaryResponse
+                {
+                    Date = date,
+                    TotalEntries = ofDay.Count,
+                    TotalCalories = ofDay.Sum(r => r.Calories),
+                    TotalProtein = ofDay.Sum(r => r.Protein),
+                    TotalCarbohydrates = ofDay.Sum(r => r.Carbohydrates),
+                    TotalFat = ofDay.Sum(r => r.Fat)
+                });
+            }
+
+            var daysWithEntries = days.Count(d => d.TotalEntries > 0);
+
+            return Results.Ok(new PeriodSummaryResponse
+            {
+                From = fromDate,
+                To = toDate,
+                DaysInPeriod = daysInPeriod,
+                DaysWithEntries = daysWithEntries,
+                Averages = new PeriodAveragesResponse
+                {
+                    Calories = Average(responses.Sum(r => r.Calories), daysWithEntries),
+                    Protein = Average(responses.Sum(r => r.Protein), daysWithEntries),
+                    Carbohydrates = Average(responses.Sum(r => r.Carbohydrates), daysWithEntries),
+                    Fat = Average(responses.Sum(r => r.Fat), daysWithEntries),
+                    Fiber = Average(responses.Sum(r => r.Fiber ?? 0), daysWithEntries),
+                    Sugar = Average(responses.Sum(r => r.Sugar ?? 0), daysWithEntries),
+                    SaturatedFat = Average(responses.Sum(r => r.SaturatedFat ?? 0), daysWithEntries),
+                    Sodium = AverageMicro(responses.Sum(r => r.Sodium ?? 0), daysWithEntries),
+                    VitaminA = AverageMicro(responses.Sum(r => r.VitaminA ?? 0), daysWithEntries),
+                    VitaminC = AverageMicro(responses.Sum(r => r.VitaminC ?? 0), daysWithEntries),
+                    VitaminD = AverageMicro(responses.Sum(r => r.VitaminD ?? 0), daysWithEntries),
+                    Calcium = AverageMicro(responses.Sum(r => r.Calcium ?? 0), daysWithEntries),
+                    Iron = AverageMicro(responses.Sum(r => r.Iron ?? 0), daysWithEntries),
+                    Potassium = AverageMicro(responses.Sum(r => r.Potassium ?? 0), daysWithEntries)
+                },
+                Days = days
+            });
+        });
+
         group.MapPut("/{id:guid}", async (Guid id, UpdateMealEntryRequest request, ClaimsPrincipal user, AppDbContext db) =>
         {
             var userId = user.FindFirst(ClaimTypes.NameIdentifier)!.Value;
@@ -278,6 +363,15 @@ public static class MealEndpoints
     private static decimal Calc(decimal per100g, decimal grams) => Math.Round(per100g * grams / 100m, MacroDecimals);
     private static decimal? CalcN(decimal? per100g, decimal grams) => per100g.HasValue ? Math.Round(per100g.Value * grams / 100m, MacroDecimals) : null;
     private static decimal? CalcMicro(decimal? per100g, decimal grams) => per100g.HasValue ? Math.Round(per100g.Value * grams / 100m, MicroDecimals) : null;
+
+    // Geteilt wird durch die Tage MIT Eintraegen, nicht durch die Laenge des Zeitraums: ein nicht
+    // erfasster Tag ist keine Nullmahlzeit, sondern eine Luecke in den Daten. Ohne Eintrag im
+    // ganzen Zeitraum gibt es keinen Schnitt - dann 0 statt einer Division durch null.
+    private static decimal Average(decimal total, int daysWithEntries) =>
+        daysWithEntries == 0 ? 0m : Math.Round(total / daysWithEntries, MacroDecimals);
+
+    private static decimal AverageMicro(decimal total, int daysWithEntries) =>
+        daysWithEntries == 0 ? 0m : Math.Round(total / daysWithEntries, MicroDecimals);
 
     private static MealEntryResponse MapToResponse(MealEntry entry, FoodItem food) => new()
     {
