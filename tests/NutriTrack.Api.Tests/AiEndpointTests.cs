@@ -651,4 +651,184 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
         Assert.Equal("40", Assert.Single(response.Headers.GetValues("Retry-After")));
         Assert.Contains("40 Sekunden", await response.Content.ReadAsStringAsync());
     }
+
+    /// <summary>
+    /// Legt einen Eintrag ueber den echten Schreibweg an und gibt dessen Id zurueck. Ueber die API
+    /// und nicht per DbContext: so steht in der Datenbank genau das, was im Betrieb dort stuende.
+    /// </summary>
+    private static async Task<Guid> AnlegenAsync(
+        HttpClient client, string name, decimal calories, decimal quantity, DateOnly date)
+    {
+        var response = await client.PostAsJsonAsync("/api/meals", new
+        {
+            foodName = name,
+            calories,
+            protein = 3m,
+            carbohydrates = 25m,
+            fat = 9m,
+            quantityInGrams = quantity,
+            mealType = "Snack",
+            date
+        });
+
+        response.EnsureSuccessStatusCode();
+        var created = await response.Content.ReadFromJsonAsync<JsonElement>();
+        return created.GetProperty("id").GetGuid();
+    }
+
+    [Fact]
+    public async Task ParseMeal_WithSourceRef_UsesTheOriginalsNutrients()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+        var gestern = DateOnly.FromDateTime(DateTime.Now).AddDays(-1);
+        var eisId = await AnlegenAsync(client, "Eis, Vanille", calories: 207m, quantity: 100m, date: gestern);
+
+        // Das Modell bezieht sich auf die Zeile - und schaetzt daneben. Die Schaetzung darf nicht
+        // gewinnen, sonst stuende derselbe Becher mit zwei Werten im Tagebuch.
+        factory.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        {
+          "items": [
+            { "searchTerm": "Eis", "label": "Eis", "sourceRef": "v1",
+              "quantityInGrams": 100, "mealType": "Snack", "productKind": "generic",
+              "estimate": { "calories": 999, "protein": 1, "carbohydrates": 1, "fat": 1 } }
+          ]
+        }
+        """);
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "den Rest vom Eis von gestern" } }
+        });
+
+        response.EnsureSuccessStatusCode();
+        var parsed = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var item = parsed.GetProperty("items")[0];
+
+        Assert.Equal("history", item.GetProperty("source").GetString());
+        Assert.Equal(eisId, item.GetProperty("sourceEntryId").GetGuid());
+        Assert.Equal("Eis, Vanille", item.GetProperty("label").GetString());
+        Assert.Equal(207m, item.GetProperty("estimate").GetProperty("calories").GetDecimal());
+        Assert.Equal("gestern", item.GetProperty("sourceHint").GetString()![..7]);
+    }
+
+    [Fact]
+    public async Task ParseMeal_WithInventedSourceRef_FallsBackToEstimate()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+        await AnlegenAsync(client, "Eis, Vanille", 207m, 100m, DateOnly.FromDateTime(DateTime.Now));
+
+        factory.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        {
+          "items": [
+            { "searchTerm": "Apfel", "label": "Apfel", "sourceRef": "v99",
+              "quantityInGrams": 150, "mealType": "Snack", "productKind": "generic",
+              "estimate": { "calories": 52, "protein": 0.3, "carbohydrates": 14, "fat": 0.2 } }
+          ]
+        }
+        """);
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "ein Apfel" } }
+        });
+
+        response.EnsureSuccessStatusCode();
+        var item = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("items")[0];
+
+        Assert.Equal("generic", item.GetProperty("source").GetString());
+        Assert.Equal(52m, item.GetProperty("estimate").GetProperty("calories").GetDecimal());
+        Assert.Equal(JsonValueKind.Null, item.GetProperty("sourceEntryId").ValueKind);
+    }
+
+    [Fact]
+    public async Task ParseMeal_WithSourceRef_NeverReachesAnotherUsersEntry()
+    {
+        // Der fremde Nutzer isst zuerst - seine Eintraege sind die einzigen, die "v1" treffen
+        // koennte, wenn die Aufloesung nicht am Besitzer haengt.
+        var (fremd, _, _) = await factory.CreateUserAsync();
+        await AnlegenAsync(fremd, "Fremdes Eis", 999m, 100m, DateOnly.FromDateTime(DateTime.Now));
+
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        factory.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        {
+          "items": [
+            { "searchTerm": "Eis", "label": "Eis", "sourceRef": "v1",
+              "quantityInGrams": 100, "mealType": "Snack", "productKind": "generic",
+              "estimate": { "calories": 200, "protein": 3, "carbohydrates": 25, "fat": 9 } }
+          ]
+        }
+        """);
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "das Eis von gestern" } }
+        });
+
+        response.EnsureSuccessStatusCode();
+        var item = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("items")[0];
+
+        Assert.NotEqual("history", item.GetProperty("source").GetString());
+        Assert.Equal(200m, item.GetProperty("estimate").GetProperty("calories").GetDecimal());
+    }
+
+    [Fact]
+    public async Task ParseMeal_SendsHistoryButNeverTheUsersIdentity()
+    {
+        var (client, email, userId) = await factory.CreateUserAsync();
+        await AnlegenAsync(client, "Eis, Vanille", 207m, 100m, DateOnly.FromDateTime(DateTime.Now));
+
+        string? body = null;
+        factory.GeminiResponder = request =>
+        {
+            body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return StubGeminiHandler.Payload("""{"items":[]}""");
+        };
+
+        await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "was habe ich gegessen" } }
+        });
+
+        Assert.NotNull(body);
+        Assert.Contains("Eis, Vanille", body);
+        Assert.DoesNotContain(email, body);
+        Assert.DoesNotContain(userId, body);
+    }
+
+    [Fact]
+    public async Task ParseMeal_WithoutHistory_BehavesAsBefore()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        string? body = null;
+        factory.GeminiResponder = request =>
+        {
+            body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return StubGeminiHandler.Payload("""
+            {
+              "items": [
+                { "searchTerm": "Apfel", "label": "Apfel", "quantityInGrams": 150,
+                  "mealType": "Snack", "productKind": "generic",
+                  "estimate": { "calories": 52, "protein": 0.3, "carbohydrates": 14, "fat": 0.2 } }
+              ]
+            }
+            """);
+        };
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "ein Apfel" } }
+        });
+
+        response.EnsureSuccessStatusCode();
+        Assert.NotNull(body);
+        // Die Systemanweisung nennt den Abschnittsnamen "Bisher gegessen" immer, um ihr Format zu
+        // erklaeren - der ganze Rumpf enthaelt ihn also auch ohne Verlauf. Entscheidend ist allein
+        // "input" (Verlaufsblock plus Gespraechsprotokoll), nicht "system_instruction" daneben.
+        using var sent = JsonDocument.Parse(body!);
+        Assert.DoesNotContain("Bisher gegessen", sent.RootElement.GetProperty("input").GetString());
+        var item = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("items")[0];
+        Assert.Equal("generic", item.GetProperty("source").GetString());
+    }
 }

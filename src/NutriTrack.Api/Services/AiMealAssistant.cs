@@ -1,6 +1,9 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using NutriTrack.Api.Contracts.Ai;
 using NutriTrack.Api.Contracts.Food;
+using NutriTrack.Domain.Entities;
+using NutriTrack.Infrastructure.Data;
 
 namespace NutriTrack.Api.Services;
 
@@ -8,6 +11,7 @@ public class AiMealAssistant(
     GeminiService gemini,
     OpenFoodFactsService openFoodFacts,
     IMemoryCache cache,
+    AppDbContext db,
     ILogger<AiMealAssistant> logger)
 {
     private const int MaxItems = 20;
@@ -35,19 +39,22 @@ public class AiMealAssistant(
     // genau die Anfragen, die sonst das knappe Suchkontingent aufbrauchen.
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(30);
 
-    public async Task<ParseMealResponse> ParseAsync(IReadOnlyList<ChatMessage> messages, CancellationToken ct)
+    public async Task<ParseMealResponse> ParseAsync(
+        IReadOnlyList<ChatMessage> messages, string userId, CancellationToken ct)
     {
+        var history = await LoadHistoryAsync(userId, ct);
+
         GeminiParseResult parsed;
         try
         {
-            parsed = await gemini.ParseAsync(messages, string.Empty, ct);
+            parsed = await gemini.ParseAsync(messages, history.Text, ct);
         }
         catch (GeminiMalformedResponseException)
         {
             // Genau ein zweiter Anlauf: Modelle straucheln gelegentlich einmalig am Schema.
             // Mehr Versuche kosten Kontingent und Wartezeit, ohne die Trefferquote zu heben.
             logger.LogWarning("Gemini-Antwort unbrauchbar, ein Wiederholungsversuch.");
-            parsed = await gemini.ParseAsync(messages, string.Empty, ct);
+            parsed = await gemini.ParseAsync(messages, history.Text, ct);
         }
 
         if (!string.IsNullOrWhiteSpace(parsed.Question))
@@ -87,7 +94,31 @@ public class AiMealAssistant(
         // lieferte 80 bis 315 kcal je 100 g (darunter ein Gewuerzpulver), "spaghetti" allein
         // TROCKENE Nudeln mit 359 - gegen 150 fuer gekochte. Ein Treffer daraus haette den
         // Tageswert still verdoppelt.
+        // Erst aufloesen, dann suchen: ein Posten mit Bezug hat seine Werte schon und darf weder
+        // Suchbudget noch das Minutenkontingent von OpenFoodFacts verbrauchen.
+        var resolved = new Dictionary<GeminiItem, (MealEntry Entry, string Hint)>();
+        foreach (var item in items)
+        {
+            if (item.SourceRef is null)
+                continue;
+
+            if (history.TryResolve(item.SourceRef, out var entry, out var hint))
+            {
+                resolved[item] = (entry, hint);
+            }
+            else
+            {
+                // Erfundene Kennungen sind die erwartete Abweichung, kein Fehlerfall: der Posten
+                // laeuft den gewoehnlichen Weg. Haeufen sie sich, stimmt etwas mit dem Prompt
+                // nicht - deshalb ueberhaupt eine Zeile.
+                logger.LogWarning(
+                    "Gemini nannte die unbekannte Verlaufskennung {SourceRef}; Posten faellt auf die Schaetzung zurueck.",
+                    item.SourceRef);
+            }
+        }
+
         var terms = items
+            .Where(item => !resolved.ContainsKey(item))
             .Where(IstMarkenprodukt)
             .Select(NormalizeTerm)
             .Where(term => term.Length > 0)
@@ -149,6 +180,39 @@ public class AiMealAssistant(
 
         foreach (var item in items)
         {
+            if (resolved.TryGetValue(item, out var bezug))
+            {
+                var food = bezug.Entry.FoodItem;
+
+                response.Items.Add(new ParsedItem
+                {
+                    // Der Name aus dem Tagebuch, nicht der des Modells: der Nutzer erkennt daran,
+                    // welcher Eintrag gemeint ist, und genau das soll er vor dem Haken pruefen.
+                    Label = food.Name,
+                    QuantityInGrams = item.QuantityInGrams,
+                    // Die Mahlzeit kommt vom Modell und nicht aus dem Original: der Rest des
+                    // Abendessens ist mittags ein Mittagessen.
+                    MealType = item.MealType,
+                    Source = "history",
+                    SourceEntryId = bezug.Entry.Id,
+                    SourceHint = bezug.Hint,
+                    Candidates = [],
+                    Estimate = new NutrientEstimate
+                    {
+                        Calories = food.Calories,
+                        Protein = food.Protein,
+                        Carbohydrates = food.Carbohydrates,
+                        Fat = food.Fat,
+                        Fiber = food.Fiber,
+                        Sugar = food.Sugar,
+                        SaturatedFat = food.SaturatedFat,
+                        Sodium = food.Sodium
+                    }
+                });
+
+                continue;
+            }
+
             var markenprodukt = IstMarkenprodukt(item);
             var candidates = markenprodukt && byTerm.TryGetValue(NormalizeTerm(item), out var found)
                 ? found
@@ -260,5 +324,27 @@ public class AiMealAssistant(
         cache.Set(cacheKey, candidates, CacheDuration);
 
         return (candidates, false);
+    }
+
+    /// <summary>
+    /// Die juengsten Eintraege der letzten <see cref="MealHistoryContext.Days"/> Tage. Absteigend,
+    /// weil der Deckel dann die aeltesten abschneidet - auf die bezieht sich am seltensten jemand.
+    /// </summary>
+    private async Task<MealHistoryContext> LoadHistoryAsync(string userId, CancellationToken ct)
+    {
+        // DateTime.Now und nicht UtcNow: Date und Time der Eintraege sind lokale Angaben (siehe
+        // den repeat-Endpunkt), und "gestern" muss dieselbe Grenze meinen wie dort.
+        var heute = DateOnly.FromDateTime(DateTime.Now);
+        var seit = heute.AddDays(-(MealHistoryContext.Days - 1));
+
+        var entries = await db.MealEntries
+            .Include(entry => entry.FoodItem)
+            .Where(entry => entry.UserId == userId && entry.Date >= seit)
+            .OrderByDescending(entry => entry.Date)
+            .ThenByDescending(entry => entry.Time)
+            .Take(MealHistoryContext.MaxEntries)
+            .ToListAsync(ct);
+
+        return MealHistoryContext.Build(entries, heute);
     }
 }
