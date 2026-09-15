@@ -128,6 +128,13 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
         Assert.Equal("text", format.GetProperty("type").GetString());
         Assert.Equal("application/json", format.GetProperty("mime_type").GetString());
         Assert.Equal("object", format.GetProperty("schema").GetProperty("type").GetString());
+
+        // Ohne Ausgabedeckel darf ein entgleistes Modell bis zum Zeitdeckel weiterschreiben. Am
+        // 2026-09-15 tat es das: estimate.sugar kam mit ueber 9000 Ziffern zurueck, die Anfrage
+        // lief 45 s und der eingebaute zweite Anlauf kam gar nicht mehr zum Zug.
+        var config = root.GetProperty("generation_config");
+        Assert.Equal("minimal", config.GetProperty("thinking_level").GetString());
+        Assert.Equal(4096, config.GetProperty("max_output_tokens").GetInt32());
     }
 
     [Fact]

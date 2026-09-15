@@ -382,6 +382,17 @@ public class GeminiService(
         // nicht jedes Modell dieselben Stufen kennt (minimal/low/medium/high).
         var thinkingLevel = configuration["Gemini:ThinkingLevel"] is { Length: > 0 } stufe ? stufe : "minimal";
 
+        // OBERGRENZE FUER DIE AUSGABE. Ohne sie schreibt ein entgleistes Modell, bis der
+        // Zeitdeckel zuschlaegt. Am 2026-09-15 im Betrieb beobachtet: estimate.sugar kam mit
+        // ueber 9000 Ziffern zurueck (JsonException "too large for a Decimal"), und mehrere
+        // Anfragen liefen dabei in die vollen 45 s. Mit Deckel bricht derselbe Fall nach wenigen
+        // Sekunden ab - wichtig vor allem, weil der zweite Anlauf in AiMealAssistant sonst gar
+        // nicht mehr stattfindet: zwei Laeufe a 45 s sprengen jede Geduld.
+        // 4096 ist reichlich bemessen: eine normale Antwort mit zwei Posten misst rund 600 Token,
+        // die erlaubten 20 Posten liegen bei etwa 1700. Der Deckel soll Entgleisungen fangen,
+        // nicht lange Mahlzeiten.
+        var maxOutputTokens = configuration.GetValue("Gemini:MaxOutputTokens", 4096);
+
         // system_instruction ist ein eigenes Feld der Interactions-API. Die Anweisung dort
         // unterzubringen statt sie dem Nutzertext voranzustellen, haelt beides sauber getrennt:
         // der Nutzer kann die Anweisung nicht mit eigenem Text ueberschreiben.
@@ -396,7 +407,7 @@ public class GeminiService(
                 mime_type = "application/json",
                 schema
             },
-            generation_config = new { thinking_level = thinkingLevel }
+            generation_config = new { thinking_level = thinkingLevel, max_output_tokens = maxOutputTokens }
         };
 
         using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)

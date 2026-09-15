@@ -85,6 +85,10 @@ services:
       # minimal statt der Voreinstellung: gemessen 3,0 s statt 8-15 s und 210 statt 1185 Token bei
       # gleicher Qualitaet. Fuer eine Extraktion mit erzwungenem Schema ist Gruebeln verschwendet.
       - Gemini__ThinkingLevel=${NUTRITRACK_GEMINI_THINKING:-minimal}
+      # Obergrenze fuer die Ausgabe. Ohne sie schreibt ein entgleistes Modell bis zum Zeitdeckel;
+      # am 2026-09-15 kam estimate.sugar mit ueber 9000 Ziffern zurueck. Durchgereicht, damit sich
+      # der Wert im Betrieb nachstellen laesst, falls jemand sehr lange Mahlzeiten eintippt.
+      - Gemini__MaxOutputTokens=${NUTRITRACK_GEMINI_MAX_OUTPUT:-4096}
       # Deckel fuer EINEN Gemini-Aufruf. Hier durchgereicht, damit ein Timeout im Betrieb ohne
       # Neubau nachgestellt werden kann - die Antwortzeit haengt an Googles Last, nicht an uns.
       - Gemini__TimeoutSeconds=${NUTRITRACK_GEMINI_TIMEOUT:-45}
