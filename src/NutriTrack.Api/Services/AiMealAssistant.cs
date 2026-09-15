@@ -40,14 +40,14 @@ public class AiMealAssistant(
         GeminiParseResult parsed;
         try
         {
-            parsed = await gemini.ParseAsync(messages, ct);
+            parsed = await gemini.ParseAsync(messages, string.Empty, ct);
         }
         catch (GeminiMalformedResponseException)
         {
             // Genau ein zweiter Anlauf: Modelle straucheln gelegentlich einmalig am Schema.
             // Mehr Versuche kosten Kontingent und Wartezeit, ohne die Trefferquote zu heben.
             logger.LogWarning("Gemini-Antwort unbrauchbar, ein Wiederholungsversuch.");
-            parsed = await gemini.ParseAsync(messages, ct);
+            parsed = await gemini.ParseAsync(messages, string.Empty, ct);
         }
 
         if (!string.IsNullOrWhiteSpace(parsed.Question))
