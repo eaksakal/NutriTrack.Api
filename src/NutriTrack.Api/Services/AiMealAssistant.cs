@@ -337,13 +337,36 @@ public class AiMealAssistant(
         var heute = DateOnly.FromDateTime(DateTime.Now);
         var seit = heute.AddDays(-(MealHistoryContext.Days - 1));
 
-        var entries = await db.MealEntries
-            .Include(entry => entry.FoodItem)
-            .Where(entry => entry.UserId == userId && entry.Date >= seit)
-            .OrderByDescending(entry => entry.Date)
-            .ThenByDescending(entry => entry.Time)
-            .Take(MealHistoryContext.MaxEntries)
-            .ToListAsync(ct);
+        List<MealEntry> entries;
+        try
+        {
+            entries = await db.MealEntries
+                .Include(entry => entry.FoodItem)
+                // Obere Grenze noetig: /api/meals prueft das Datum nicht gegen die Zukunft, und
+                // ohne "<= heute" wuerde ein vorgetragener Eintrag per OrderByDescending ganz oben
+                // stehen und einem echten juengeren Eintrag den Platz unter dem 40er-Deckel nehmen.
+                .Where(entry => entry.UserId == userId && entry.Date >= seit && entry.Date <= heute)
+                .OrderByDescending(entry => entry.Date)
+                .ThenByDescending(entry => entry.Time)
+                .Take(MealHistoryContext.MaxEntries)
+                .ToListAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // Abbruch durch den Aufrufer ist kein Ladefehler - er soll durchschlagen und nicht als
+            // "Verlauf nicht ladbar" enden.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Vor diesem Feature fasste die Erfassung die Datenbank gar nicht an; ein Ausfall hier
+            // (z. B. SQLITE_BUSY unter Schreiblast, kein WAL-Modus) waere sonst eine Regression, die
+            // an den drei Gemini-catch-Bloecken in AiEndpoints vorbeifliegt und einen blanken 500
+            // erzeugt. Die Erfassung laeuft stattdessen im bereits getesteten Pfad "kein Verlauf"
+            // weiter - nur ohne Verlaufsbezug.
+            logger.LogWarning(ex, "Verlauf konnte nicht geladen werden, KI-Erfassung laeuft ohne Verlaufsbezug weiter.");
+            return MealHistoryContext.Empty;
+        }
 
         return MealHistoryContext.Build(entries, heute);
     }

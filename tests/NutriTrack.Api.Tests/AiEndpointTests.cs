@@ -2,7 +2,10 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using NutriTrack.Api.Tests.Infrastructure;
+using NutriTrack.Infrastructure.Data;
 
 namespace NutriTrack.Api.Tests;
 
@@ -830,5 +833,81 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
         Assert.DoesNotContain("Bisher gegessen", sent.RootElement.GetProperty("input").GetString());
         var item = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("items")[0];
         Assert.Equal("generic", item.GetProperty("source").GetString());
+    }
+
+    /// <summary>
+    /// Ein zukuenftig datierter Eintrag ist ueber die normale Oberflaeche anlegbar (weder
+    /// POST /api/meals noch die Datumsnavigation pruefen gegen die Zukunft) und darf trotzdem
+    /// nicht im Verlaufsblock auftauchen - sonst verdraengt er per OrderByDescending echte
+    /// Vergangenheit vom 40er-Deckel. Gegen "input" geprueft, nicht gegen den ganzen Rumpf: die
+    /// Systemanweisung nennt "Bisher gegessen" auch ohne Verlauf (siehe Test oben).
+    /// </summary>
+    [Fact]
+    public async Task ParseMeal_ExcludesFutureDatedEntriesFromHistory()
+    {
+        var (client, _, _) = await factory.CreateUserAsync();
+        var heute = DateOnly.FromDateTime(DateTime.Now);
+        await AnlegenAsync(client, "Heutiger Testsnack", 52m, 150m, heute);
+        await AnlegenAsync(client, "Morgiges Testfruehstueck", 300m, 100m, heute.AddDays(1));
+
+        string? body = null;
+        factory.GeminiResponder = request =>
+        {
+            body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return StubGeminiHandler.Payload("""{"items":[]}""");
+        };
+
+        await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "was habe ich gegessen" } }
+        });
+
+        Assert.NotNull(body);
+        using var sent = JsonDocument.Parse(body!);
+        var input = sent.RootElement.GetProperty("input").GetString();
+
+        Assert.Contains("Heutiger Testsnack", input);
+        Assert.DoesNotContain("Morgiges Testfruehstueck", input);
+    }
+
+    /// <summary>
+    /// Belegt den Fallschirm in LoadHistoryAsync: die MealEntries-Tabelle fehlt der laufenden
+    /// Anwendung unterm Fuss weg (ohne WAL wirkt das aehnlich wie ein SQLITE_BUSY unter
+    /// Schreiblast - beides eine Ausnahme, die vor diesem Fix an den drei Gemini-catch-Bloecken
+    /// in AiEndpoints vorbeigeflogen waere). Die Erfassung muss trotzdem mit 200 antworten, im
+    /// bereits getesteten Pfad "kein Verlauf".
+    /// </summary>
+    [Fact]
+    public async Task ParseMeal_WhenHistoryCannotBeLoaded_StillSucceedsWithoutHistory()
+    {
+        using var isolated = new NutriTrackApiFactory();
+        await isolated.ResetDatabaseAsync();
+
+        var (client, _, _) = await isolated.CreateUserAsync();
+
+        using (var scope = isolated.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.Database.ExecuteSqlRawAsync("DROP TABLE MealEntries");
+        }
+
+        isolated.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        {
+          "items": [
+            { "searchTerm": "Apfel", "label": "Apfel", "quantityInGrams": 150,
+              "mealType": "Snack", "productKind": "generic",
+              "estimate": { "calories": 52, "protein": 0.3, "carbohydrates": 14, "fat": 0.2 } }
+          ]
+        }
+        """);
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "ein Apfel" } }
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var parsed = await response.Content.ReadFromJsonAsync<ParseMealResponseDto>();
+        Assert.Equal("generic", Assert.Single(parsed!.Items).Source);
     }
 }
