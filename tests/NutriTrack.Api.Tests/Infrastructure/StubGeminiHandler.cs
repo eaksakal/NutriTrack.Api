@@ -23,7 +23,7 @@ public sealed class StubGeminiHandler(Func<HttpRequestMessage, HttpResponseMessa
         var envelope = $$"""
         {
           "id": "v1_stub",
-          "model": "gemini-3.5-flash",
+          "model": "gemini-3.6-flash",
           "status": "completed",
           "steps": [
             { "type": "user_input", "content": [ { "type": "text", "text": "stub" } ] },
@@ -49,7 +49,7 @@ public sealed class StubGeminiHandler(Func<HttpRequestMessage, HttpResponseMessa
     {
         var escaped = System.Text.Json.JsonSerializer.Serialize(innerJson);
         var envelope = $$"""
-        { "id": "v1_stub", "model": "gemini-3.5-flash", "status": "completed", "output_text": {{escaped}} }
+        { "id": "v1_stub", "model": "gemini-3.6-flash", "status": "completed", "output_text": {{escaped}} }
         """;
 
         return new HttpResponseMessage(HttpStatusCode.OK)

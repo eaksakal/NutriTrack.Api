@@ -364,7 +364,15 @@ public class GeminiService(
 
         var model = configuration["Gemini:Model"] is { Length: > 0 } configured
             ? configured
-            : "gemini-3.5-flash";
+            : "gemini-3.6-flash";
+
+        // NICHT auf gemini-3.5-flash zurueckstellen. Das Modell steht zwar weiterhin in
+        // /v1beta/models, ist ueber /v1beta/interactions aber tot: gemessen am 2026-09-15 vom
+        // Betriebsrechner schickt Google darauf ueber 50 s KEIN EINZIGES BYTE - kein 404, kein
+        // 400, nur Schweigen, bis der Zeitdeckel zuschlaegt. Derselbe Rumpf gegen
+        // gemini-3.6-flash: 200 nach 2,9 s. Das sah wie ein zu knapper Deckel aus und kostete
+        // zwei Erhoehungen (15 -> 25 -> 45 s), bevor jemand die Antwortzeit wirklich MASS.
+        // 3.7 und 3.8 scheiden aus: sie lehnen thinking_level=minimal ab.
 
         // Gemessen am echten Dienst (gemini-3.5-flash, 2026-09-12, gleiche Eingabe):
         //   Standard  8-15 s, 859 Denk-Token, 1185 Token gesamt  (riss den Zeitdeckel)

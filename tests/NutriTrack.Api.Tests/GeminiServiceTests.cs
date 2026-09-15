@@ -120,7 +120,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         using var sent = JsonDocument.Parse(body!);
         var root = sent.RootElement;
-        Assert.Equal("gemini-3.5-flash", root.GetProperty("model").GetString());
+        Assert.Equal("gemini-3.6-flash", root.GetProperty("model").GetString());
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("input").GetString()));
         // Die Einheit von sodium muss mitreisen - ohne sie liefert das Modell Milligramm.
         Assert.Contains("NICHT Milligramm", root.GetProperty("system_instruction").GetString());

@@ -18,7 +18,7 @@ set -euo pipefail
 
 : "${NUTRITRACK_GEMINI_KEY:?NUTRITRACK_GEMINI_KEY ist nicht gesetzt}"
 
-MODEL="${1:-${NUTRITRACK_GEMINI_MODEL:-gemini-3.5-flash}}"
+MODEL="${1:-${NUTRITRACK_GEMINI_MODEL:-gemini-3.6-flash}}"
 API_REVISION="2026-05-20"
 
 response=$(curl -sS -X POST "https://generativelanguage.googleapis.com/v1beta/interactions" \

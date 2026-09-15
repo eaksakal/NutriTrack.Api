@@ -65,7 +65,7 @@ public class NutriTrackApiFactory : WebApplicationFactory<AuthResponse>, IAsyncL
         builder.UseSetting("Jwt:Issuer", "NutriTrack");
         builder.UseSetting("Jwt:Audience", "NutriTrack");
         builder.UseSetting("Gemini:ApiKey", "test-key");
-        builder.UseSetting("Gemini:Model", "gemini-3.5-flash");
+        builder.UseSetting("Gemini:Model", "gemini-3.6-flash");
 
         builder.ConfigureTestServices(services =>
         {
