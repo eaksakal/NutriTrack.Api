@@ -92,6 +92,14 @@ public class GeminiItem
     [JsonPropertyName("label")]
     public string Label { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Kennung einer Zeile aus dem Verlaufsblock ("v2"), wenn der Nutzer sich auf etwas frueher
+    /// Gegessenes bezogen hat. Null im Normalfall. Aufgeloest wird sie im Assistenten - hier steht
+    /// nur, was das Modell gesagt hat.
+    /// </summary>
+    [JsonPropertyName("sourceRef")]
+    public string? SourceRef { get; set; }
+
     [JsonPropertyName("quantityInGrams")]
     public decimal QuantityInGrams { get; set; }
 
@@ -173,6 +181,15 @@ public class GeminiService(
         haette nennen koennen, ist der schlechtere Weg.
         Nenne in der Rueckfrage ruhig eine Groessenordnung zur Auswahl, damit sie leicht zu
         beantworten ist.
+        Steht ueber dem Gespraech ein Abschnitt "Bisher gegessen", dann ist das der Verlauf der
+        letzten Tage, jede Zeile mit einer Kennung in eckigen Klammern. Bezieht sich der Nutzer auf
+        eine dieser Zeilen ("das Eis von gestern", "nochmal das Fruehstueck", "den Rest davon"),
+        setze sourceRef auf ihre Kennung, zum Beispiel "v2". Die Naehrwerte sind dann bereits
+        bekannt und dein estimate wird verworfen - fuelle es trotzdem, das Schema verlangt es.
+        quantityInGrams gilt weiterhin und ist deine Aufgabe: "die andere Haelfte" und "nochmal
+        dasselbe" meinen die Menge aus der Zeile, "die Haelfte davon" die halbe.
+        Ohne erkennbaren Bezug laesst du sourceRef weg und verfaehrst wie bisher. Erfinde NIE eine
+        Kennung, die nicht im Abschnitt steht.
         Antworte ausschliesslich im vorgegebenen Schema.
         """;
 
@@ -189,13 +206,24 @@ public class GeminiService(
         return new GeminiUnavailableException(grund, ursache);
     }
 
-    public async Task<GeminiParseResult> ParseAsync(IReadOnlyList<ChatMessage> messages, CancellationToken ct)
+    public async Task<GeminiParseResult> ParseAsync(
+        IReadOnlyList<ChatMessage> messages, string historyBlock, CancellationToken ct)
     {
         var apiKey = configuration["Gemini:ApiKey"];
         if (string.IsNullOrWhiteSpace(apiKey))
             throw Unavailable("Gemini:ApiKey fehlt.");
 
         var transcript = new StringBuilder();
+
+        // Der Verlauf steht VOR dem Gespraech: er ist Hintergrund, nicht Teil dessen, was der
+        // Nutzer gerade gesagt hat. Stuende er dahinter, liest ihn das Modell leicht als letzte
+        // Aeusserung und zerlegt den Verlauf selbst in Posten.
+        if (!string.IsNullOrWhiteSpace(historyBlock))
+        {
+            transcript.AppendLine(historyBlock.TrimEnd());
+            transcript.AppendLine();
+        }
+
         foreach (var message in messages)
             transcript.AppendLine($"{(message.Role == "assistant" ? "Rueckfrage" : "Nutzer")}: {message.Text}");
 
@@ -219,6 +247,10 @@ public class GeminiService(
             // Unbekanntes wird "generic": lieber der eigene Standardwert als ein zufaelliges
             // Markenprodukt aus der Datenbank. Der Fehler faellt dann kleiner aus.
             item.ProductKind = item.ProductKind?.Trim().ToLowerInvariant() == "branded" ? "branded" : "generic";
+            // Leere Zeichenkette ist dasselbe wie "kein Bezug". Das Modell liefert bei einem
+            // optionalen Feld gern "" statt es wegzulassen, und ein leerer Schluessel wuerde im
+            // Woerterbuch spaeter als sinnlose Suche auflaufen.
+            item.SourceRef = string.IsNullOrWhiteSpace(item.SourceRef) ? null : item.SourceRef.Trim();
             NormalizeEstimate(item, logger);
         }
 
@@ -669,6 +701,13 @@ public class GeminiService(
                     {
                         searchTerm = new { type = "string" },
                         label = new { type = "string" },
+                        sourceRef = new
+                        {
+                            type = "string",
+                            description = "Kennung einer Zeile aus dem Abschnitt \"Bisher gegessen\" "
+                                          + "(zum Beispiel \"v2\"), wenn der Nutzer sich auf diesen "
+                                          + "Eintrag bezieht. Sonst weglassen."
+                        },
                         quantityInGrams = new { type = "number" },
                         // Wertemenge gehoert ins Schema, nicht nur in den Anweisungstext. Die
                         // Handprobe am 2026-09-12 lieferte "Frühstück": das Modell antwortet in

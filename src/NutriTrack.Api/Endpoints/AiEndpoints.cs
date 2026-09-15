@@ -45,7 +45,7 @@ public static class AiEndpoints
 
             try
             {
-                var result = await assistant.ParseAsync(request.Messages, ct);
+                var result = await assistant.ParseAsync(request.Messages, userId, ct);
                 return Results.Ok(result);
             }
             catch (GeminiQuotaException ex)

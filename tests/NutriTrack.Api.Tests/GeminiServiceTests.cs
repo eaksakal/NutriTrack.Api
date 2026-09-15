@@ -31,7 +31,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var result = await Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Broetchen" }],
-            CancellationToken.None);
+            string.Empty, CancellationToken.None);
 
         Assert.Null(result.Question);
         var item = Assert.Single(result.Items);
@@ -50,7 +50,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var result = await Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "Reis mit Haehnchen" }],
-            CancellationToken.None);
+            string.Empty, CancellationToken.None);
 
         Assert.Equal("Wie gross war die Portion Reis?", result.Question);
         Assert.Empty(result.Items);
@@ -68,7 +68,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         await Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "zwei Broetchen" }],
-            CancellationToken.None);
+            string.Empty, CancellationToken.None);
 
         Assert.NotNull(body);
         Assert.Contains("zwei Broetchen", body);
@@ -88,7 +88,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var result = await Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
-            CancellationToken.None);
+            string.Empty, CancellationToken.None);
 
         Assert.Equal("Apfel", Assert.Single(result.Items).Label);
     }
@@ -110,7 +110,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         await Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
-            CancellationToken.None);
+            string.Empty, CancellationToken.None);
 
         Assert.Equal(
             "https://generativelanguage.googleapis.com/v1beta/interactions",
@@ -145,7 +145,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var result = await Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Broetchen" }],
-            CancellationToken.None);
+            string.Empty, CancellationToken.None);
 
         Assert.Equal(0.45m, Assert.Single(result.Items).Estimate.Sodium);
     }
@@ -161,7 +161,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var result = await Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "Unfug" }],
-            CancellationToken.None);
+            string.Empty, CancellationToken.None);
 
         var estimate = Assert.Single(result.Items).Estimate;
         Assert.Equal(900m, estimate.Calories);
@@ -185,7 +185,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
         var exception = await Assert.ThrowsAsync<GeminiMalformedResponseException>(() =>
             Service().ParseAsync(
                 [new ChatMessage { Role = "user", Text = "ein Apfel" }],
-                CancellationToken.None));
+                string.Empty, CancellationToken.None));
 
         Assert.Contains("steps[].content[].text", exception.Message);
         Assert.Contains("candidates", exception.Message);
@@ -225,7 +225,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var result = await Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "zwei Broetchen" }],
-            CancellationToken.None);
+            string.Empty, CancellationToken.None);
 
         var item = Assert.Single(result.Items);
         Assert.Equal("Breakfast", item.MealType);
@@ -257,7 +257,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var result = await Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
-            CancellationToken.None);
+            string.Empty, CancellationToken.None);
 
         Assert.Equal("Apfel", Assert.Single(result.Items).Label);
     }
@@ -278,7 +278,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
-            CancellationToken.None));
+            string.Empty, CancellationToken.None));
 
         Assert.Equal(erwartet, ex.Scope);
         Assert.Equal(TimeSpan.FromSeconds(27), ex.RetryAfter);
@@ -291,7 +291,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
-            CancellationToken.None));
+            string.Empty, CancellationToken.None));
 
         Assert.Equal(GeminiQuotaScope.PerDay, ex.Scope);
         Assert.Null(ex.RetryAfter);
@@ -310,7 +310,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
-            CancellationToken.None));
+            string.Empty, CancellationToken.None));
 
         Assert.Equal(TimeSpan.FromSeconds(39.826942774), ex.RetryAfter);
     }
@@ -329,7 +329,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
-            CancellationToken.None));
+            string.Empty, CancellationToken.None));
 
         Assert.Equal(erwartet, ex.Scope);
     }
@@ -355,7 +355,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
-            CancellationToken.None));
+            string.Empty, CancellationToken.None));
 
         Assert.Equal(TimeSpan.FromSeconds(39.826942774), ex.RetryAfter);
 
@@ -371,7 +371,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
-            CancellationToken.None));
+            string.Empty, CancellationToken.None));
 
         Assert.Null(ex.RetryAfter);
         Assert.Equal(GeminiQuotaScope.Unknown, ex.Scope);
@@ -384,9 +384,90 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
-            CancellationToken.None));
+            string.Empty, CancellationToken.None));
 
         Assert.Equal(GeminiQuotaScope.Unknown, ex.Scope);
         Assert.Equal(TimeSpan.FromSeconds(42), ex.RetryAfter);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithHistory_PutsItInTheRequestBody()
+    {
+        string? body = null;
+        factory.GeminiResponder = request =>
+        {
+            body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return StubGeminiHandler.Payload("""{"items":[]}""");
+        };
+
+        await Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "den Rest vom Eis" }],
+            "Bisher gegessen:\n[v1] gestern 21:30 Snack - Eis, Vanille (100 g)\n",
+            CancellationToken.None);
+
+        Assert.NotNull(body);
+        Assert.Contains("Bisher gegessen", body);
+        Assert.Contains("Eis, Vanille", body);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithoutHistory_SendsNoHistoryBlock()
+    {
+        string? body = null;
+        factory.GeminiResponder = request =>
+        {
+            body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return StubGeminiHandler.Payload("""{"items":[]}""");
+        };
+
+        await Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "ein Apfel" }], string.Empty, CancellationToken.None);
+
+        Assert.NotNull(body);
+        // Nicht im gesamten Rumpf pruefen: die SystemInstruction nennt den Abschnittsnamen
+        // "Bisher gegessen" IMMER, um das Format zu erklaeren, unabhaengig vom historyBlock. Die
+        // eigentliche Behauptung des Tests gilt fuer das Gespraech (input), nicht fuer die feste
+        // Anweisung.
+        using var sent = JsonDocument.Parse(body!);
+        Assert.DoesNotContain("Bisher gegessen", sent.RootElement.GetProperty("input").GetString());
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithSourceRef_ReadsIt()
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        {
+          "items": [
+            { "searchTerm": "Eis", "label": "Eis, Vanille", "sourceRef": " v2 ",
+              "quantityInGrams": 100, "mealType": "Snack", "productKind": "generic",
+              "estimate": { "calories": 200, "protein": 3, "carbohydrates": 25, "fat": 9 } }
+          ]
+        }
+        """);
+
+        var result = await Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "den Rest vom Eis" }], string.Empty, CancellationToken.None);
+
+        var item = Assert.Single(result.Items);
+        Assert.Equal("v2", item.SourceRef);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithoutSourceRef_LeavesItNull()
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.Payload("""
+        {
+          "items": [
+            { "searchTerm": "Apfel", "label": "Apfel", "sourceRef": "",
+              "quantityInGrams": 150, "mealType": "Snack", "productKind": "generic",
+              "estimate": { "calories": 52, "protein": 0.3, "carbohydrates": 14, "fat": 0.2 } }
+          ]
+        }
+        """);
+
+        var result = await Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "ein Apfel" }], string.Empty, CancellationToken.None);
+
+        Assert.Null(Assert.Single(result.Items).SourceRef);
     }
 }
