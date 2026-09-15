@@ -122,8 +122,12 @@ builder.Services.AddHttpClient<GeminiService>(client =>
     // 15 s waren zu knapp: der erste echte Aufruf am 2026-09-12 lief in den Deckel, weil das
     // Modell ausgiebig "nachdachte". Mit thinking_level=low ist das entschaerft, aber die
     // Antwortzeit schwankt weiterhin - ein erfolgreicher Aufruf nach 20 s ist dem Nutzer lieber
-    // als ein Abbruch nach 15.
-    var seconds = builder.Configuration.GetValue("Gemini:TimeoutSeconds", 25);
+    // als ein Abbruch nach 15. Auch 25 s reichten im Betrieb nicht: laengere Eingaben und
+    // Lastspitzen bei Google liefen weiter in den Deckel ("Gemini hat nicht rechtzeitig
+    // geantwortet"). 45 s ist die Obergrenze dessen, was mit einer Oberflaeche, die "Denkt
+    // nach..." zeigt, noch zumutbar ist - darueber gehoert die Erfassung in den Hintergrund.
+    // Ueber Gemini__TimeoutSeconds (docker-compose.yml) ohne Neubau nachstellbar.
+    var seconds = builder.Configuration.GetValue("Gemini:TimeoutSeconds", 45);
     client.Timeout = TimeSpan.FromSeconds(seconds);
 });
 

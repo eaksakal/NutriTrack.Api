@@ -85,6 +85,9 @@ services:
       # minimal statt der Voreinstellung: gemessen 3,0 s statt 8-15 s und 210 statt 1185 Token bei
       # gleicher Qualitaet. Fuer eine Extraktion mit erzwungenem Schema ist Gruebeln verschwendet.
       - Gemini__ThinkingLevel=${NUTRITRACK_GEMINI_THINKING:-minimal}
+      # Deckel fuer EINEN Gemini-Aufruf. Hier durchgereicht, damit ein Timeout im Betrieb ohne
+      # Neubau nachgestellt werden kann - die Antwortzeit haengt an Googles Last, nicht an uns.
+      - Gemini__TimeoutSeconds=${NUTRITRACK_GEMINI_TIMEOUT:-45}
       # OpenFoodFacts verlangt einen User-Agent der Form "AppName/Version (ContactEmail)" und
       # behandelt Aufrufer ohne erkennbare Kennung im Zweifel als Bot. Ohne Wert laeuft alles
       # weiter, aber mit hoeherem Sperrrisiko - deshalb kein Pflichtfeld.
