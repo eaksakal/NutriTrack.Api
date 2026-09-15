@@ -22,7 +22,7 @@ Tagebuch — ohne dass der Nutzer die Liste durchsucht.
 1. **Der Verlauf der letzten drei Tage geht an Google.** Das ist eine bewusste Abkehr von
    Entscheidung 4 des Ursprungs-Designs vom 2026-09-12 („ausschließlich den Esstext … Google sieht
    ‚2 Brötchen mit Gouda', aber nie, zu wem das gehört"). Was Google künftig sieht, ist ein
-   Essverlauf ohne Kennung: Labels, Mengen, Mahlzeit, Uhrzeit. Weiterhin **nicht** übertragen
+   anonymer Essverlauf: Labels, Mengen, Mahlzeit, Uhrzeit. Weiterhin **nicht** übertragen
    werden Nutzer-ID, E-Mail, Tagesbilanz, Ziele und Gewicht. Der Verlauf bleibt damit anonym, ist
    aber deutlich mehr als eine einzelne Essensbeschreibung, und im Freikontingent lesen laut
    Googles Bedingungen menschliche Prüfer mit. Diese Abwägung hat der Betreiber dieser Instanz am
