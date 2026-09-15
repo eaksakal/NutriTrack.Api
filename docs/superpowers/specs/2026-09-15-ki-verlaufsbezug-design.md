@@ -28,7 +28,7 @@ Tagebuch — ohne dass der Nutzer die Liste durchsucht.
    Googles Bedingungen menschliche Prüfer mit. Diese Abwägung hat der Betreiber dieser Instanz am
    2026-09-15 ausdrücklich getroffen; sie gehört in `.env.example`, wo die alte Zusage steht.
 2. **Das Modell entscheidet, WELCHER Eintrag gemeint ist — nicht, welche Werte er hat.** Gemini
-   gibt eine Marke zurück (`v1`, `v2`, …), nie abgeschriebene Nährwerte. Die Zahlen kommen aus der
+   gibt eine Kennung zurück (`v1`, `v2`, …), nie abgeschriebene Nährwerte. Die Zahlen kommen aus der
    eigenen Datenbank. Ein Modell, das 412 kcal als 421 zurückgibt, erzeugt sonst über
    `HasSameNutrients` einen zweiten FoodItem mit minimal abweichenden Werten — genau die Dublette,
    die der repeat-Endpunkt (`18a8e00`) bewusst vermeidet.
@@ -52,7 +52,7 @@ Browser ──POST /api/ai/parse-meal──> AiEndpoints ──> AiMealAssistant
                                     ▼                   ▼                   ▼
                               AppDbContext        GeminiService     OpenFoodFactsService
                           (Verlauf 3 Tage,      (Verlauf im Prompt,   (nur für Posten
-                           Marken v1..vN)        sourceRef zurück)     OHNE sourceRef)
+                           Kennungen v1..vN)        sourceRef zurück)     OHNE sourceRef)
 
 Bestätigung ─ Posten mit source="history" ──> POST /api/meals/{sourceEntryId}/repeat
             └ alle übrigen Posten ─────────> POST /api/meals            (beide bestehend)
@@ -73,9 +73,9 @@ Bisher gegessen:
 Relative Tagesnamen statt Datumsangaben: der Nutzer sagt „gestern", nicht „am 14.09.". Die
 Umrechnung passiert hier, wo die Zeitzone des Servers gilt, und nicht im Modell.
 
-Parallel entsteht ein `Dictionary<string, MealEntry>` von Marke auf Eintrag. Es lebt nur für die
+Parallel entsteht ein `Dictionary<string, MealEntry>` von Kennung auf Eintrag. Es lebt nur für die
 Dauer der Anfrage und enthält ausschließlich Einträge dieses Nutzers — eine vom Modell erfundene
-Marke kann deshalb nie auf fremde Daten zeigen.
+Kennung kann deshalb nie auf fremde Daten zeigen.
 
 Ist der Verlauf leer, entfällt der Block ersatzlos und der Prompt ist Zeichen für Zeichen der
 heutige. Der Fall ist nicht exotisch: er gilt für jeden neuen Nutzer.
@@ -85,7 +85,7 @@ heutige. Der Fall ist nicht exotisch: er gilt für jeden neuen Nutzer.
 `GeminiItem` bekommt ein optionales Feld `sourceRef`. Die Systemanweisung wird ergänzt:
 
 > Bezieht sich der Nutzer auf etwas, das im Abschnitt „Bisher gegessen" steht („das Eis von
-> gestern", „nochmal das Frühstück", „den Rest davon"), setze `sourceRef` auf die Marke der Zeile
+> gestern", „nochmal das Frühstück", „den Rest davon"), setze `sourceRef` auf die Kennung der Zeile
 > und lasse `estimate` leer — die Nährwerte sind bereits bekannt. `quantityInGrams` gilt
 > weiterhin: „die andere Hälfte" und „nochmal dasselbe" meinen die Menge von damals, „die Hälfte
 > davon" die halbe. Ohne erkennbaren Bezug lässt du `sourceRef` leer und verfährst wie bisher.
@@ -94,14 +94,14 @@ heutige. Der Fall ist nicht exotisch: er gilt für jeden neuen Nutzer.
 
 Für jeden Posten mit gesetztem `sourceRef`:
 
-- **Marke bekannt** → `ParsedItem` mit `Source = "history"`, `SourceEntryId` der Eintrags-Id,
+- **Kennung bekannt** → `ParsedItem` mit `Source = "history"`, `SourceEntryId` der Eintrags-Id,
   Label und Nährwerten des Original-FoodItems. Kein OpenFoodFacts-Aufruf für diesen Posten; er
   belastet damit weder das Suchbudget von 8 s noch das Minutenkontingent des Fremddienstes.
-- **Marke unbekannt** (halluziniert) → der Posten fällt still auf den heutigen Weg zurück:
+- **Kennung unbekannt** (halluziniert) → der Posten fällt still auf den heutigen Weg zurück:
   `searchTerm` und `estimate` wie bei jedem anderen. Eine Fehlermeldung wäre hier falsch, denn der
   Nutzer hat nichts falsch gemacht und bekommt einen brauchbaren Vorschlag. Eine Logzeile schon:
-  häufen sich erfundene Marken, stimmt etwas mit dem Prompt nicht.
-- **Marke bekannt, aber `estimate` trotzdem gefüllt** → `estimate` wird verworfen. Die Datenbank
+  häufen sich erfundene Kennungen, stimmt etwas mit dem Prompt nicht.
+- **Kennung bekannt, aber `estimate` trotzdem gefüllt** → `estimate` wird verworfen. Die Datenbank
   gewinnt gegen das Modell.
 
 ### Frontend
