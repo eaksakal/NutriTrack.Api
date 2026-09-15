@@ -82,11 +82,15 @@ heutige. Der Fall ist nicht exotisch: er gilt für jeden neuen Nutzer.
 
 ### Schema und Systemanweisung
 
-`GeminiItem` bekommt ein optionales Feld `sourceRef`. Die Systemanweisung wird ergänzt:
+`GeminiItem` bekommt ein optionales Feld `sourceRef`; `estimate` bleibt im Schema **required**.
+Googles Schema kennt kein „required, außer wenn sourceRef gesetzt ist", und ein bedingt gelockerter
+Vertrag wäre für die 95 % der Posten ohne Verlaufsbezug der schlechtere Tausch. Das Modell liefert
+also weiterhin eine Schätzung mit; bei gesetztem `sourceRef` wird sie verworfen. Die Systemanweisung
+wird ergänzt:
 
 > Bezieht sich der Nutzer auf etwas, das im Abschnitt „Bisher gegessen" steht („das Eis von
-> gestern", „nochmal das Frühstück", „den Rest davon"), setze `sourceRef` auf die Kennung der Zeile
-> und lasse `estimate` leer — die Nährwerte sind bereits bekannt. `quantityInGrams` gilt
+> gestern", „nochmal das Frühstück", „den Rest davon"), setze `sourceRef` auf die Kennung der Zeile.
+> Die Nährwerte sind dann bereits bekannt und dein `estimate` wird verworfen. `quantityInGrams` gilt
 > weiterhin: „die andere Hälfte" und „nochmal dasselbe" meinen die Menge von damals, „die Hälfte
 > davon" die halbe. Ohne erkennbaren Bezug lässt du `sourceRef` leer und verfährst wie bisher.
 
@@ -106,7 +110,9 @@ Für jeden Posten mit gesetztem `sourceRef`:
 
 ### Frontend
 
-`ai.ts`: `source` bekommt den vierten Wert `'history'`, `ParsedItem` das Feld `sourceEntryId`.
+`ai.ts`: `source` bekommt den vierten Wert `'history'`, `ParsedItem` die Felder `sourceEntryId`
+(Guid des Original-Eintrags) und `sourceHint` (der Zeitpunkt in Worten, „gestern 21:30"). Den Hinweis
+formuliert der Server, weil dort die Umrechnung auf relative Tagesnamen ohnehin schon steht.
 Beim Übernehmen ruft die Bestätigungsliste für solche Posten `meals.repeat(sourceEntryId, …)`
 statt `meals.create(…)`; alle übrigen Posten laufen unverändert.
 
