@@ -31,7 +31,7 @@ public static class GoalsEndpoints
         group.MapPost("/suggest", async (
             SuggestGoalsRequest request,
             IConfiguration configuration,
-            GeminiService gemini,
+            AiProviderFactory providerFactory,
             ClaimsPrincipal user,
             AiRateLimiter limiter,
             HttpResponse httpResponse,
@@ -85,7 +85,7 @@ public static class GoalsEndpoints
                 {
                     // HIER GEHT NUR DER WUNSCH RAUS. Gewicht, Groesse, Alter und Geschlecht
                     // bleiben auf diesem Rechner - das ist die Abmachung mit dem Nutzer.
-                    var gedeutet = await gemini.ParseWishAsync(request.Wish, ct);
+                    var gedeutet = await providerFactory.Current().ParseWishAsync(request.Wish, ct);
 
                     richtung = gedeutet.Direction switch
                     {

@@ -35,6 +35,16 @@ public static class AdminEndpoints
             if (request.MaxOutputTokens is { } tokens && (tokens < 256 || tokens > 65536))
                 return Results.BadRequest(new { Error = "maxOutputTokens muss zwischen 256 und 65536 liegen." });
 
+            // Ein unbekannter Anbietername wird abgewiesen statt stillschweigend gespeichert. Der
+            // Rueckfall in AiSettingsProvider.Read() faengt ihn zwar auch ab, aber wer ihn ueber
+            // die Oberflaeche eintraegt, soll es sofort erfahren statt spaeter zu raetseln, warum
+            // die Wahl nicht greift.
+            if (request.Provider is { Length: > 0 } gewaehlt
+                && gewaehlt != IAiProvider.Gemini && gewaehlt != IAiProvider.OpenRouter)
+            {
+                return Results.BadRequest(new { Error = "Anbieter muss \"gemini\" oder \"openrouter\" sein." });
+            }
+
             var zeile = await db.AiSettings.SingleOrDefaultAsync(ct);
             if (zeile is null)
             {
@@ -44,7 +54,9 @@ public static class AdminEndpoints
 
             // Leer heisst "zurueck zur Umgebungsvariable", nicht "leerer Modellname". Deshalb
             // wird auf null normalisiert statt die Eingabe durchzureichen.
+            zeile.Provider = Leer(request.Provider);
             zeile.Model = Leer(request.Model);
+            zeile.OpenRouterModel = Leer(request.OpenRouterModel);
             zeile.ThinkingLevel = Leer(request.ThinkingLevel);
             zeile.MaxOutputTokens = request.MaxOutputTokens;
             zeile.UpdatedAt = DateTime.UtcNow;
@@ -61,23 +73,28 @@ public static class AdminEndpoints
         group.MapPost("/settings/probe", async (
             ClaimsPrincipal user,
             IConfiguration configuration,
-            GeminiService gemini,
+            AiProviderFactory providerFactory,
             AiRateLimiter limiter,
             CancellationToken ct) =>
         {
             if (!IstAdmin(user, configuration))
                 return Results.NotFound();
 
+            var provider = providerFactory.Current();
+
             // Fehlender Schluessel ist die wahrscheinlichste Fehlkonfiguration ueberhaupt, und
             // ausgerechnet dafuer sagte die Probe bisher nichts Brauchbares: ohne diese Pruefung
-            // wirft GeminiService.ProbeAsync eine AiUnavailableException, die hier ungefangen
-            // durchschlaegt - dieses Projekt hat weder UseExceptionHandler noch AddProblemDetails,
-            // also kommt ein 500 ohne Rumpf heraus. Vor der Bremse und nicht danach: ein Aufruf,
-            // der ohnehin nicht klappen kann, soll keinen Platz aus dem Kontingentzaehler
-            // verbrennen (siehe Kommentar an TryAcquire unten).
-            if (string.IsNullOrWhiteSpace(configuration["Gemini:ApiKey"]))
+            // wirft ProbeAsync eine AiUnavailableException, die hier ungefangen durchschlaegt -
+            // dieses Projekt hat weder UseExceptionHandler noch AddProblemDetails, also kommt ein
+            // 500 ohne Rumpf heraus. Vor der Bremse und nicht danach: ein Aufruf, der ohnehin
+            // nicht klappen kann, soll keinen Platz aus dem Kontingentzaehler verbrennen (siehe
+            // Kommentar an TryAcquire unten).
+            // Welcher Schluessel gemeint ist, haengt am GEWAEHLTEN Anbieter: eine Probe, die wegen
+            // des falschen Schluessels 503 meldet, waere schlimmer als gar keine Pruefung.
+            var apiKeySetting = provider.Name == IAiProvider.OpenRouter ? "OpenRouter:ApiKey" : "Gemini:ApiKey";
+            if (string.IsNullOrWhiteSpace(configuration[apiKeySetting]))
                 return Results.Json(
-                    new { Error = "Verbindungstest ist nicht möglich (Gemini:ApiKey fehlt)." },
+                    new { Error = $"Verbindungstest ist nicht möglich ({apiKeySetting} fehlt)." },
                     statusCode: StatusCodes.Status503ServiceUnavailable);
 
             var userId = user.FindFirst(ClaimTypes.NameIdentifier)!.Value;
@@ -90,7 +107,7 @@ public static class AdminEndpoints
                     new { Error = "Zu viele KI-Anfragen in der letzten Stunde. Versuche es später noch einmal." },
                     statusCode: StatusCodes.Status429TooManyRequests);
 
-            var ergebnis = await gemini.ProbeAsync(ct);
+            var ergebnis = await provider.ProbeAsync(ct);
 
             return Results.Ok(new AiProbeResponse
             {
@@ -149,8 +166,12 @@ public static class AdminEndpoints
 
         return new AiSettingsResponse
         {
+            Provider = s.Provider,
+            ProviderFromDatabase = s.ProviderFromDb,
             Model = s.Model,
             ModelFromDatabase = s.ModelFromDb,
+            OpenRouterModel = s.OpenRouterModel,
+            OpenRouterModelFromDatabase = s.OpenRouterModelFromDb,
             ThinkingLevel = s.ThinkingLevel,
             ThinkingLevelFromDatabase = s.ThinkingLevelFromDb,
             MaxOutputTokens = s.MaxOutputTokens,

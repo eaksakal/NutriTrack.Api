@@ -120,6 +120,31 @@ public class AdminEndpointTests
     }
 
     [Fact]
+    public async Task Put_SwitchesProviderAndRejectsUnknownOnes()
+    {
+        using var f = new AdminFactory("chef@example.com");
+        await f.ResetDatabaseAsync();
+        var (client, _, _) = await f.CreateUserAsync("chef@example.com");
+
+        var ok = await client.PutAsJsonAsync("/api/admin/settings", new
+        {
+            provider = "openrouter", openRouterModel = "dots-studio/dots-3-note-preview:free"
+        });
+        ok.EnsureSuccessStatusCode();
+
+        var json = await (await client.GetAsync("/api/admin/settings")).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("openrouter", json.GetProperty("provider").GetString());
+        Assert.True(json.GetProperty("providerFromDatabase").GetBoolean());
+
+        var schlecht = await client.PutAsJsonAsync("/api/admin/settings", new { provider = "opendrouter" });
+        Assert.Equal(HttpStatusCode.BadRequest, schlecht.StatusCode);
+
+        // Der abgewiesene Wert darf nichts ueberschrieben haben.
+        var danach = await (await client.GetAsync("/api/admin/settings")).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("openrouter", danach.GetProperty("provider").GetString());
+    }
+
+    [Fact]
     public async Task Probe_CallsGeminiOnceAndReportsResult()
     {
         using var f = new AdminFactory("chef@example.com");

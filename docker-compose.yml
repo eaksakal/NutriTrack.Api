@@ -92,6 +92,13 @@ services:
       # Deckel fuer EINEN Gemini-Aufruf. Hier durchgereicht, damit ein Timeout im Betrieb ohne
       # Neubau nachgestellt werden kann - die Antwortzeit haengt an Googles Last, nicht an uns.
       - Gemini__TimeoutSeconds=${NUTRITRACK_GEMINI_TIMEOUT:-45}
+      # Welcher KI-Anbieter gilt: gemini oder openrouter. Umschaltbar auch in der Verwaltung
+      # unter /admin; dieser Wert ist der Rueckfall und die Notbremse.
+      - Ai__Provider=${NUTRITRACK_AI_PROVIDER:-gemini}
+      - OpenRouter__ApiKey=${NUTRITRACK_OPENROUTER_KEY:-}
+      - OpenRouter__Model=${NUTRITRACK_OPENROUTER_MODEL:-nex-agi/nex-n2.5-pro:free}
+      # 90 s statt Geminis 45: die kostenlosen Modelle brauchten gemessene 24 bis 35 Sekunden.
+      - OpenRouter__TimeoutSeconds=${NUTRITRACK_OPENROUTER_TIMEOUT:-90}
       # OpenFoodFacts verlangt einen User-Agent der Form "AppName/Version (ContactEmail)" und
       # behandelt Aufrufer ohne erkennbare Kennung im Zweifel als Bot. Ohne Wert laeuft alles
       # weiter, aber mit hoeherem Sperrrisiko - deshalb kein Pflichtfeld.

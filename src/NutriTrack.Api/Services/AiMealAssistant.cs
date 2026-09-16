@@ -8,7 +8,7 @@ using NutriTrack.Infrastructure.Data;
 namespace NutriTrack.Api.Services;
 
 public class AiMealAssistant(
-    GeminiService gemini,
+    AiProviderFactory providerFactory,
     OpenFoodFactsService openFoodFacts,
     IMemoryCache cache,
     AppDbContext db,
@@ -44,17 +44,22 @@ public class AiMealAssistant(
     {
         var history = await LoadHistoryAsync(userId, ct);
 
+        // EINMAL gewaehlt und dann festgehalten: beide Anlaeufe (der zweite bei Schemabruch)
+        // sollen denselben Anbieter treffen, nicht potenziell verschiedene, falls die Einstellung
+        // zwischen den beiden Aufrufen umschaltet.
+        var provider = providerFactory.Current();
+
         AiParseResult parsed;
         try
         {
-            parsed = await gemini.ParseAsync(messages, history.Text, ct);
+            parsed = await provider.ParseAsync(messages, history.Text, ct);
         }
         catch (AiMalformedResponseException)
         {
             // Genau ein zweiter Anlauf: Modelle straucheln gelegentlich einmalig am Schema.
             // Mehr Versuche kosten Kontingent und Wartezeit, ohne die Trefferquote zu heben.
-            logger.LogWarning("Gemini-Antwort unbrauchbar, ein Wiederholungsversuch.");
-            parsed = await gemini.ParseAsync(messages, history.Text, ct);
+            logger.LogWarning("{Provider}-Antwort unbrauchbar, ein Wiederholungsversuch.", provider.Name);
+            parsed = await provider.ParseAsync(messages, history.Text, ct);
         }
 
         if (!string.IsNullOrWhiteSpace(parsed.Question))
@@ -67,7 +72,8 @@ public class AiMealAssistant(
         var items = parsed.Items;
         if (items.Count > MaxItems)
         {
-            logger.LogWarning("Gemini lieferte {Count} Posten, gekappt auf {Max}.", items.Count, MaxItems);
+            logger.LogWarning(
+                "{Provider} lieferte {Count} Posten, gekappt auf {Max}.", provider.Name, items.Count, MaxItems);
             response.Notice = $"Nur die ersten {MaxItems} Posten übernommen.";
             items = items.Take(MaxItems).ToList();
         }
@@ -112,8 +118,8 @@ public class AiMealAssistant(
                 // laeuft den gewoehnlichen Weg. Haeufen sie sich, stimmt etwas mit dem Prompt
                 // nicht - deshalb ueberhaupt eine Zeile.
                 logger.LogWarning(
-                    "Gemini nannte die unbekannte Verlaufskennung {SourceRef}; Posten faellt auf die Schaetzung zurueck.",
-                    item.SourceRef);
+                    "{Provider} nannte die unbekannte Verlaufskennung {SourceRef}; Posten faellt auf die Schaetzung zurueck.",
+                    provider.Name, item.SourceRef);
             }
         }
 

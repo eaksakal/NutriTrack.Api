@@ -178,6 +178,25 @@ public class AiFailureLogTests(NutriTrackApiFactory factory) : IClassFixture<Nut
     }
 
     [Fact]
+    public async Task Failure_RecordsWhichProviderItWas()
+    {
+        await LeereAsync();
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        factory.GeminiResponder = _ => throw new TaskCanceledException("Zeitdeckel im Test.");
+
+        await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "ein Apfel" } }
+        });
+
+        // Ohne diese Spalte steht nach einem Wechsel nicht mehr fest, welcher Dienst welchen
+        // Fehlschlag verursacht hat - und genau der Vergleich ist der Grund, warum es zwei gibt.
+        var eintrag = Assert.Single(await ProtokollAsync());
+        Assert.Equal("gemini", eintrag.Provider);
+    }
+
+    [Fact]
     public async Task Recorder_KeepsOnlyTheNewestEntries()
     {
         await LeereAsync();

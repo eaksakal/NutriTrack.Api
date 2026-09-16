@@ -48,6 +48,7 @@ public class AiFailureRecorder(
                 Id = Guid.NewGuid(),
                 OccurredAt = timeProvider.GetUtcNow().UtcDateTime,
                 Kind = kind,
+                Provider = einstellungen.Provider,
                 Model = einstellungen.Model,
                 ThinkingLevel = einstellungen.ThinkingLevel,
                 DurationMs = (int)Math.Min(durationMs, int.MaxValue),

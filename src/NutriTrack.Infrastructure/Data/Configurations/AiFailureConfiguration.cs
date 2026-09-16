@@ -11,6 +11,7 @@ public class AiFailureConfiguration : IEntityTypeConfiguration<AiFailure>
         builder.HasKey(f => f.Id);
 
         builder.Property(f => f.Kind).IsRequired().HasMaxLength(20);
+        builder.Property(f => f.Provider).HasMaxLength(20);
         builder.Property(f => f.Model).HasMaxLength(100);
         builder.Property(f => f.ThinkingLevel).HasMaxLength(20);
 

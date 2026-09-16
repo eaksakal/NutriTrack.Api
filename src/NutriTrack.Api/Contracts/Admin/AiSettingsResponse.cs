@@ -9,8 +9,14 @@ namespace NutriTrack.Api.Contracts.Admin;
 /// </summary>
 public class AiSettingsResponse
 {
+    public string Provider { get; set; } = string.Empty;
+    public bool ProviderFromDatabase { get; set; }
+
     public string Model { get; set; } = string.Empty;
     public bool ModelFromDatabase { get; set; }
+
+    public string OpenRouterModel { get; set; } = string.Empty;
+    public bool OpenRouterModelFromDatabase { get; set; }
 
     public string ThinkingLevel { get; set; } = string.Empty;
     public bool ThinkingLevelFromDatabase { get; set; }
@@ -24,7 +30,9 @@ public class AiSettingsResponse
 /// </summary>
 public class UpdateAiSettingsRequest
 {
+    public string? Provider { get; set; }
     public string? Model { get; set; }
+    public string? OpenRouterModel { get; set; }
     public string? ThinkingLevel { get; set; }
     public int? MaxOutputTokens { get; set; }
 }
