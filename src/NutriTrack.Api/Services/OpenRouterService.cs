@@ -12,9 +12,9 @@ namespace NutriTrack.Api.Services;
 /// damit fuer ein Ernaehrungstagebuch zu klein ist. OpenRouter gibt 50 - dafuer brauchten die
 /// kostenlosen Modelle im selben Test 24 bis 35 Sekunden statt Geminis 3 bis 9.
 ///
-/// Systemanweisung und Naehrwert-Normalisierung stammen aus GeminiService (dort internal static)
-/// statt aus einer eigenen Abschrift - siehe GeminiService.SystemInstruction, .WishInstruction
-/// und .NormalizeEstimate. Nur der Umschlag ist hier anders.
+/// Systemanweisung und Naehrwert-Normalisierung kommen aus AiInstructions, der gemeinsamen Heimat
+/// anbieterneutraler Fachregeln fuer beide IAiProvider-Umsetzungen - nicht aus einer eigenen
+/// Abschrift und nicht aus GeminiService. Nur der Umschlag ist hier anders.
 /// </summary>
 public class OpenRouterService(
     HttpClient httpClient,
@@ -60,7 +60,7 @@ public class OpenRouterService(
         foreach (var message in messages)
             transcript.AppendLine($"{(message.Role == "assistant" ? "Rueckfrage" : "Nutzer")}: {message.Text}");
 
-        var inner = await SendAsync(GeminiService.SystemInstruction, transcript.ToString(), ResponseSchema, ct);
+        var inner = await SendAsync(AiInstructions.SystemInstruction, transcript.ToString(), ResponseSchema, ct);
 
         AiParseResult result;
         try
@@ -79,11 +79,11 @@ public class OpenRouterService(
 
         foreach (var item in result.Items)
         {
-            item.MealType = GeminiService.NormalizeMealType(item.MealType);
+            item.MealType = AiInstructions.NormalizeMealType(item.MealType);
             // Unbekanntes wird "generic" - derselbe Sicherheitsgedanke wie bei GeminiService.
             item.ProductKind = item.ProductKind?.Trim().ToLowerInvariant() == "branded" ? "branded" : "generic";
             item.SourceRef = string.IsNullOrWhiteSpace(item.SourceRef) ? null : item.SourceRef.Trim();
-            GeminiService.NormalizeEstimate(item, logger);
+            AiInstructions.NormalizeEstimate(item, logger);
         }
 
         return result;
@@ -95,7 +95,7 @@ public class OpenRouterService(
     /// </summary>
     public async Task<AiWishResult> ParseWishAsync(string wish, CancellationToken ct)
     {
-        var inner = await SendAsync(GeminiService.WishInstruction, $"Nutzer: {wish}", WishSchema, ct);
+        var inner = await SendAsync(AiInstructions.WishInstruction, $"Nutzer: {wish}", WishSchema, ct);
 
         try
         {
@@ -140,7 +140,7 @@ public class OpenRouterService(
         var einstellungen = settingsProvider.Read();
         var start = timeProvider.GetTimestamp();
 
-        var payload = BuildBody(GeminiService.SystemInstruction, "Nutzer: zwei Broetchen mit Gouda\n", ResponseSchema);
+        var payload = BuildBody(AiInstructions.SystemInstruction, "Nutzer: zwei Broetchen mit Gouda\n", ResponseSchema);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
         {
@@ -287,40 +287,73 @@ public class OpenRouterService(
     /// Rumpf - am 2026-09-16 beobachtet, als ein Modell "Upstream error from Nvidia: Service
     /// temporarily overloaded" mit 200 zurueckgab. Wer nur den Statuscode prueft, verbucht das
     /// als unverstaendliche Antwort und sucht den Fehler bei sich.
+    ///
+    /// Faengt JsonException ab: eine Antwort mit Status 200, die gar kein JSON ist (Gatewayseite,
+    /// Wartungsseite, Proxy) ist derselbe Fehlerfall eine Stufe frueher - der Dienst hat
+    /// geantwortet, aber nicht im vereinbarten Format. Ohne diesen Fang floege eine rohe
+    /// JsonException heraus, die kein Endpunkt kennt (AiFailureResponse faengt nur AiUnavailable-,
+    /// AiQuota- und AiMalformedResponseException), und der Nutzer saehe einen 500 ohne Rumpf.
     /// </summary>
     private static void ThrowIfErrorInBody(string body, Func<string, Exception?, Exception> unavailable)
     {
-        using var document = JsonDocument.Parse(body);
-        if (document.RootElement.ValueKind != JsonValueKind.Object
-            || !document.RootElement.TryGetProperty("error", out var error))
+        JsonDocument document;
+        try
         {
-            return;
+            document = JsonDocument.Parse(body);
+        }
+        catch (JsonException)
+        {
+            throw new AiMalformedResponseException("Antwort von OpenRouter ist kein JSON.");
         }
 
-        var message = error.TryGetProperty("message", out var m) ? m.GetString() : null;
-        throw unavailable($"OpenRouter meldet: {message ?? "unbekannter Fehler"}", null);
+        using (document)
+        {
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("error", out var error))
+            {
+                return;
+            }
+
+            var message = error.TryGetProperty("message", out var m) ? m.GetString() : null;
+            throw unavailable($"OpenRouter meldet: {message ?? "unbekannter Fehler"}", null);
+        }
     }
 
     /// <summary>
     /// Die Modellausgabe steckt in choices[0].message.content als Zeichenkette mit JSON darin -
     /// eine Schachtelung mehr als bei Gemini.
+    ///
+    /// Faengt JsonException wie ThrowIfErrorInBody ab (dieselbe Begruendung dort): SendAsync ruft
+    /// zwar immer erst ThrowIfErrorInBody auf denselben Rumpf auf, aber diese Methode soll fuer
+    /// sich selbst sicher sein und nicht stillschweigend von der Aufrufreihenfolge abhaengen.
     /// </summary>
     private static string ExtractContent(string body)
     {
-        using var document = JsonDocument.Parse(body);
-
-        if (document.RootElement.TryGetProperty("choices", out var choices)
-            && choices.ValueKind == JsonValueKind.Array
-            && choices.GetArrayLength() > 0
-            && choices[0].TryGetProperty("message", out var message)
-            && message.TryGetProperty("content", out var content)
-            && content.GetString() is { Length: > 0 } text)
+        JsonDocument document;
+        try
         {
-            return text;
+            document = JsonDocument.Parse(body);
+        }
+        catch (JsonException)
+        {
+            throw new AiMalformedResponseException("Antwort von OpenRouter ist kein JSON.");
         }
 
-        throw new AiMalformedResponseException(
-            "Unerwarteter Antwortumschlag; erwartet wurde choices[0].message.content.");
+        using (document)
+        {
+            if (document.RootElement.TryGetProperty("choices", out var choices)
+                && choices.ValueKind == JsonValueKind.Array
+                && choices.GetArrayLength() > 0
+                && choices[0].TryGetProperty("message", out var message)
+                && message.TryGetProperty("content", out var content)
+                && content.GetString() is { Length: > 0 } text)
+            {
+                return text;
+            }
+
+            throw new AiMalformedResponseException(
+                "Unerwarteter Antwortumschlag; erwartet wurde choices[0].message.content.");
+        }
     }
 
     private static object WishSchema => new

@@ -212,7 +212,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
     [InlineData("breakfast", "Breakfast")]
     [InlineData("", "Snack")]
     public void NormalizeMealType_BringtDeutscheAntwortenAufDasEnum(string eingabe, string erwartet)
-        => Assert.Equal(erwartet, GeminiService.NormalizeMealType(eingabe));
+        => Assert.Equal(erwartet, AiInstructions.NormalizeMealType(eingabe));
 
     /// <summary>
     /// Der Fall aus der Handprobe gegen den echten Dienst am 2026-09-12: der Prompt ist deutsch,

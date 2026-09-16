@@ -49,10 +49,21 @@ public class OpenRouterServiceTests(NutriTrackApiFactory factory) : IClassFixtur
 
         var format = root.GetProperty("response_format");
         Assert.Equal("json_schema", format.GetProperty("type").GetString());
-        var schema = format.GetProperty("json_schema");
-        Assert.True(schema.GetProperty("strict").GetBoolean());
-        // Ohne additionalProperties:false lehnt der strikte Modus das Schema ab.
-        Assert.False(schema.GetProperty("schema").GetProperty("additionalProperties").GetBoolean());
+        var jsonSchema = format.GetProperty("json_schema");
+        Assert.True(jsonSchema.GetProperty("strict").GetBoolean());
+
+        // additionalProperties:false muss an JEDEM Objekt des Schemas stehen, nicht nur an der
+        // Wurzel - sonst lehnt der strikte Modus ab, aber erst im Betrieb, nicht hier. Eine
+        // Pruefung, die nur die Wurzel ansieht, wuerde schweigen, wenn es am Posten- oder am
+        // estimate-Objekt spaeter verlorenginge.
+        var rootSchema = jsonSchema.GetProperty("schema");
+        Assert.False(rootSchema.GetProperty("additionalProperties").GetBoolean());
+
+        var itemSchema = rootSchema.GetProperty("properties").GetProperty("items").GetProperty("items");
+        Assert.False(itemSchema.GetProperty("additionalProperties").GetBoolean());
+
+        var estimateSchema = itemSchema.GetProperty("properties").GetProperty("estimate");
+        Assert.False(estimateSchema.GetProperty("additionalProperties").GetBoolean());
     }
 
     [Fact]
@@ -87,6 +98,20 @@ public class OpenRouterServiceTests(NutriTrackApiFactory factory) : IClassFixtur
             [new ChatMessage { Role = "user", Text = "ein Apfel" }], string.Empty, CancellationToken.None));
 
         Assert.Contains("overloaded", ex.Detail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithNonJsonBodyInsideA200_ReportsSchemaBreak()
+    {
+        // Status 200, aber der Rumpf ist gar kein JSON - eine Gateway- oder Wartungsseite. Ohne
+        // eigenen Fang fliegt hier eine rohe JsonException heraus, die kein Endpunkt kennt
+        // (AiFailureResponse faengt nur AiUnavailable-, AiQuota- und
+        // AiMalformedResponseException) - der Nutzer saehe einen blanken 500 statt einer
+        // sauberen Anbieterfehlermeldung.
+        factory.OpenRouterResponder = _ => StubOpenRouterHandler.NonJsonGatewayPage();
+
+        await Assert.ThrowsAsync<AiMalformedResponseException>(() => Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "ein Apfel" }], string.Empty, CancellationToken.None));
     }
 
     [Fact]

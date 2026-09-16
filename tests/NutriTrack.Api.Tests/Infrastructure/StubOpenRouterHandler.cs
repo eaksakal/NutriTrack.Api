@@ -75,6 +75,20 @@ public sealed class StubOpenRouterHandler(Func<HttpRequestMessage, HttpResponseM
                 Encoding.UTF8, "application/json")
         };
 
+    /// <summary>
+    /// Status 200, aber der Rumpf ist gar kein JSON - eine Gateway- oder Wartungsseite, wie sie
+    /// ein Proxy vor dem eigentlichen Dienst ausliefert. Im Review-Nachgang zum 2026-09-16
+    /// festgehalten: bei einem Dienst, bei dem im Test eines von drei Modellen sofort ausfiel,
+    /// ist das kein theoretischer Fall.
+    /// </summary>
+    public static HttpResponseMessage NonJsonGatewayPage() =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                "<html><body><h1>502 Bad Gateway</h1><p>nginx</p></body></html>",
+                Encoding.UTF8, "text/html")
+        };
+
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
         => Task.FromResult(responder(request));
