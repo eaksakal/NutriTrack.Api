@@ -133,6 +133,14 @@ builder.Services.AddHttpClient<GeminiService>(client =>
     client.Timeout = TimeSpan.FromSeconds(seconds);
 });
 
+builder.Services.AddHttpClient<OpenRouterService>(client =>
+{
+    // 90 s statt Geminis 45: die kostenlosen Modelle brauchten am 2026-09-16 gemessene 24 bis
+    // 35 Sekunden. Ein Deckel darunter schluege im Normalbetrieb zu, nicht im Fehlerfall.
+    var seconds = builder.Configuration.GetValue("OpenRouter:TimeoutSeconds", 90);
+    client.Timeout = TimeSpan.FromSeconds(seconds);
+});
+
 // decimal ist unter SQLite nicht nativ; die Spalten sind in den Entity-Konfigurationen
 // bewusst als TEXT deklariert (Begruendung in SqliteConventions). Eine ConfigureWarnings-
 // Unterdrueckung ist dafuer nicht noetig: die frueheren Provider-Versionen warnten hier bei

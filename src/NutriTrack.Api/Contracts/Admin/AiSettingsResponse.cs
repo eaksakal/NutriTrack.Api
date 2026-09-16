@@ -34,7 +34,11 @@ public class AiProbeResponse
     public int StatusCode { get; set; }
     public long DurationMs { get; set; }
     public string Model { get; set; } = string.Empty;
-    public string ThinkingLevel { get; set; } = string.Empty;
+
+    /// <summary>Null bei einem Anbieter ohne Denkstufe (OpenRouter). Kein Platzhalter wie ""
+    /// oder "-": der wuerde eine Einstellung behaupten, die es dort nicht gibt.</summary>
+    public string? ThinkingLevel { get; set; }
+
     public string RawBody { get; set; } = string.Empty;
 }
 

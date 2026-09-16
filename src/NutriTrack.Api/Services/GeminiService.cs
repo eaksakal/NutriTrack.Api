@@ -121,9 +121,13 @@ public class AiItem
 /// Auf Namespace-Ebene wie die anderen drei Ergebnistypen, nicht in GeminiService geschachtelt:
 /// alle vier sind dasselbe interne Ergebnisformat der KI-Erfassung, das beide Anbieter fuellen.
 /// Anfangs steckte er in der Klasse - ein Versehen beim Bau der Handprobe, kein Entwurf.
+///
+/// ThinkingLevel ist nullable: die Denkstufe ist eine Eigenheit von Gemini, OpenRouter kennt sie
+/// nicht. Null sagt das ehrlich; ein erfundener Platzhalter ("" oder "-") behauptete eine
+/// Einstellung, die es dort gar nicht gibt.
 /// </summary>
 public sealed record AiProbeResult(
-    int StatusCode, long DurationMs, string Model, string ThinkingLevel, string RawBody);
+    int StatusCode, long DurationMs, string Model, string? ThinkingLevel, string RawBody);
 
 public class GeminiService(
     HttpClient httpClient,
@@ -150,7 +154,11 @@ public class GeminiService(
     // GRAMM je 100 g (OpenFoodFacts-Feld sodium_100g, siehe MealEndpoints.CalcMicro); ein
     // Sprachmodell nennt Natrium von sich aus praktisch immer in Milligramm. Ohne diesen Satz
     // landet der Wert um den Faktor 1000 zu hoch im Tagebuch.
-    private const string SystemInstruction = """
+    //
+    // internal statt private: OpenRouterService nutzt denselben Text. Zwei Fassungen derselben
+    // Natriumregel liefen unweigerlich auseinander - und genau diese Regel hat am 2026-09-12
+    // verhindert, dass Natrium um den Faktor 1000 zu hoch im Tagebuch landet.
+    internal const string SystemInstruction = """
         Du zerlegst deutschsprachige Beschreibungen von Mahlzeiten in einzelne Posten.
         Fuer jeden Posten lieferst du: searchTerm (kurzer Suchbegriff fuer eine
         Lebensmitteldatenbank, ohne Mengenangabe), label (lesbarer Name), quantityInGrams
@@ -282,8 +290,11 @@ public class GeminiService(
     /// falscher Naehrwert spaeter nicht mehr: PUT /api/meals/{id} aendert nur Menge, Mahlzeit und
     /// Zeit, und ueber FindReusableFoodItemAsync entstuende ein globaler FoodItem mit dem Unsinn.
     /// Bewusst nur die unmoeglichen Bereiche: ein Wert, der bloss ungewoehnlich ist, bleibt stehen.
+    ///
+    /// internal statt private: OpenRouterService ruft dieselbe Methode statt eine zweite Fassung
+    /// der Natriumregel zu pflegen.
     /// </summary>
-    private static void NormalizeEstimate(AiItem item, ILogger logger)
+    internal static void NormalizeEstimate(AiItem item, ILogger logger)
     {
         var estimate = item.Estimate;
 
@@ -561,7 +572,9 @@ public class GeminiService(
             : null;
     }
 
-    private const string WishInstruction = """
+    // internal statt private: OpenRouterService.ParseWishAsync nutzt denselben Text statt einer
+    // zweiten Abschrift, die mit der Zeit von dieser abweichen koennte.
+    internal const string WishInstruction = """
         Du liest aus einem deutschsprachigen Satz heraus, welches Ernaehrungsziel jemand verfolgt.
         Du rechnest NICHTS aus - Kalorien und Makros bestimmt eine Formel, nicht du.
         Liefere:

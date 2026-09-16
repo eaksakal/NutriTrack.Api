@@ -50,6 +50,10 @@ public class NutriTrackApiFactory : WebApplicationFactory<AuthResponse>, IAsyncL
     public Func<HttpRequestMessage, HttpResponseMessage> GeminiResponder { get; set; } =
         _ => StubGeminiHandler.Payload("""{"items":[]}""");
 
+    /// <summary>Antwortverhalten des OpenRouter-Stubs, analog zu <see cref="GeminiResponder"/>.</summary>
+    public Func<HttpRequestMessage, HttpResponseMessage> OpenRouterResponder { get; set; } =
+        _ => StubOpenRouterHandler.Payload("""{"items":[]}""");
+
     /// <summary>Null bedeutet: normales Stub-Verhalten. Gesetzt: diese Antwort fuer jede Anfrage.</summary>
     public Func<HttpRequestMessage, HttpResponseMessage?>? OpenFoodFactsResponder { get; set; }
 
@@ -66,6 +70,7 @@ public class NutriTrackApiFactory : WebApplicationFactory<AuthResponse>, IAsyncL
         builder.UseSetting("Jwt:Audience", "NutriTrack");
         builder.UseSetting("Gemini:ApiKey", "test-key");
         builder.UseSetting("Gemini:Model", "gemini-3.6-flash");
+        builder.UseSetting("OpenRouter:ApiKey", "test-openrouter-key");
 
         builder.ConfigureTestServices(services =>
         {
@@ -79,6 +84,9 @@ public class NutriTrackApiFactory : WebApplicationFactory<AuthResponse>, IAsyncL
 
             services.AddHttpClient<GeminiService>()
                 .ConfigurePrimaryHttpMessageHandler(() => new StubGeminiHandler(request => GeminiResponder(request)));
+
+            services.AddHttpClient<OpenRouterService>()
+                .ConfigurePrimaryHttpMessageHandler(() => new StubOpenRouterHandler(request => OpenRouterResponder(request)));
         });
     }
 
