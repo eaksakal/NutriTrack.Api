@@ -76,6 +76,32 @@ public sealed class StubOpenRouterHandler(Func<HttpRequestMessage, HttpResponseM
         };
 
     /// <summary>
+    /// Abschluss-Review Befund 5: error ist hier ein blanker String statt eines Objekts.
+    /// ThrowIfErrorInBody rief vor dem Fix TryGetProperty ungeprueft auf error auf; auf einem
+    /// Nicht-Objekt wirft das eine InvalidOperationException, die kein Endpunkt faengt.
+    /// </summary>
+    public static HttpResponseMessage ErrorIsNotAnObject() =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"error":"ueberlastet"}""",
+                Encoding.UTF8, "application/json")
+        };
+
+    /// <summary>
+    /// Abschluss-Review Befund 5, die zweite Haelfte desselben Bugs: error IST ein Objekt, aber
+    /// message ist keine Zeichenkette. GetString() ohne vorherige ValueKind-Pruefung wirft hier
+    /// dieselbe InvalidOperationException wie beim Fall oben.
+    /// </summary>
+    public static HttpResponseMessage ErrorMessageIsNotAString() =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"error":{"message":42,"code":500}}""",
+                Encoding.UTF8, "application/json")
+        };
+
+    /// <summary>
     /// Status 200, aber der Rumpf ist gar kein JSON - eine Gateway- oder Wartungsseite, wie sie
     /// ein Proxy vor dem eigentlichen Dienst ausliefert. Im Review-Nachgang zum 2026-09-16
     /// festgehalten: bei einem Dienst, bei dem im Test eines von drei Modellen sofort ausfiel,

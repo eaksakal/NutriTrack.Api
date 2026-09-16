@@ -21,6 +21,13 @@ public interface IAiProvider
     /// Wechsel feststeht, welcher Dienst welchen Fehlschlag verursacht hat.</summary>
     string Name { get; }
 
+    /// <summary>Konfigurationsschluessel des Zugangsschluessels dieses Anbieters ("Gemini:ApiKey"
+    /// oder "OpenRouter:ApiKey"). Eine Eigenschaft statt einer Fallunterscheidung an jeder
+    /// Aufrufstelle: ohne sie stuende `provider.Name == IAiProvider.OpenRouter ? ... : ...`
+    /// gleichlautend in AiEndpoints, AdminEndpoints UND GoalsEndpoints - und ein dritter Anbieter
+    /// muesste an drei Stellen zugleich nachgezogen werden statt an einer.</summary>
+    string ApiKeySetting { get; }
+
     Task<AiParseResult> ParseAsync(
         IReadOnlyList<ChatMessage> messages, string historyBlock, CancellationToken ct);
 

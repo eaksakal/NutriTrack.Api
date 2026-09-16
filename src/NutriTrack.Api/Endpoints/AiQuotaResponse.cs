@@ -27,7 +27,9 @@ internal static class AiQuotaResponse
         AiQuotaScope.PerMinute =>
             $"Zu viele KI-Anfragen in kurzer Zeit. Versuche es {Gleich(ex.RetryAfter)} noch einmal.",
 
-        // Google nannte keine Grenze: dann darf hier auch nicht behauptet werden, welche es war.
+        // Der Anbieter nannte keine auswertbare Grenze: dann darf hier auch nicht behauptet
+        // werden, welche es war. Gilt fuer beide Anbieter - Google UND OpenRouter beantworten
+        // manche 429 ohne auswertbares Feld.
         _ => $"Die KI weist gerade weitere Anfragen ab. Versuche es {Gleich(ex.RetryAfter)} noch einmal.",
     };
 

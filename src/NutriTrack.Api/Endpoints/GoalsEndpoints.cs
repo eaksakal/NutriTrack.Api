@@ -81,7 +81,7 @@ public static class GoalsEndpoints
             // Gemini:ApiKey die Deutung still uebergehen, obwohl OpenRouter einsatzbereit waere -
             // oder umgekehrt ein vorhandener Gemini:ApiKey den Aufruf ankuendigen, obwohl der
             // tatsaechlich benutzte OpenRouter-Schluessel fehlt.
-            var apiKeySetting = provider.Name == IAiProvider.OpenRouter ? "OpenRouter:ApiKey" : "Gemini:ApiKey";
+            var apiKeySetting = provider.ApiKeySetting;
             if (!string.IsNullOrWhiteSpace(request.Wish)
                 && !string.IsNullOrWhiteSpace(configuration[apiKeySetting]))
             {

@@ -43,14 +43,21 @@ public class AiFailureRecorder(
 
         try
         {
+            // Modell und Denkstufe gehoeren zum AUSGEFALLENEN Anbieter, nicht immer zu Gemini:
+            // ein Fehlschlag unter OpenRouter schrieb vor diesem Fix Geminis Modellnamen und
+            // dessen Denkstufe mit, obwohl beide an diesem Fehlschlag gar nicht beteiligt waren.
+            // Dieselbe Regel wie bei AiProbeResult.ThinkingLevel: OpenRouter kennt keine
+            // Denkstufe, und ein erfundener Wert waere falscher als gar keiner.
+            var istOpenRouter = einstellungen.Provider == IAiProvider.OpenRouter;
+
             db.AiFailures.Add(new AiFailure
             {
                 Id = Guid.NewGuid(),
                 OccurredAt = timeProvider.GetUtcNow().UtcDateTime,
                 Kind = kind,
                 Provider = einstellungen.Provider,
-                Model = einstellungen.Model,
-                ThinkingLevel = einstellungen.ThinkingLevel,
+                Model = istOpenRouter ? einstellungen.OpenRouterModel : einstellungen.Model,
+                ThinkingLevel = istOpenRouter ? null : einstellungen.ThinkingLevel,
                 DurationMs = (int)Math.Min(durationMs, int.MaxValue),
                 StatusCode = statusCode,
                 Reason = reason.Length > MaxReasonLength ? reason[..MaxReasonLength] : reason

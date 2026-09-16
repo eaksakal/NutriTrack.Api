@@ -13,6 +13,7 @@ public static class AiEndpoints
         group.MapPost("/parse-meal", async (
             ParseMealRequest request,
             IConfiguration configuration,
+            AiProviderFactory providerFactory,
             AiMealAssistant assistant,
             ClaimsPrincipal user,
             AiRateLimiter limiter,
@@ -25,9 +26,15 @@ public static class AiEndpoints
 
             // Fehlender Schluessel ist hier bewusst KEIN Startabbruch wie beim Jwt-Schluessel:
             // ein nicht eingerichtetes Zusatzfeature darf das Tagebuch nicht lahmlegen.
-            if (string.IsNullOrWhiteSpace(configuration["Gemini:ApiKey"]))
+            // Welcher Schluessel gemeint ist, haengt am GEWAEHLTEN Anbieter (derselbe Kniff wie im
+            // Probe-Endpunkt in AdminEndpoints und im Vorschlag-Endpunkt in GoalsEndpoints): sonst
+            // meldete diese Kernfunktion bei gewaehltem OpenRouter immer 503 wegen des fehlenden
+            // Gemini:ApiKey, obwohl OpenRouter einsatzbereit waere - der Grund, warum dieser
+            // Branch fuer genau die Konfiguration, fuer die es ihn gibt, tot war.
+            var provider = providerFactory.Current();
+            if (string.IsNullOrWhiteSpace(configuration[provider.ApiKeySetting]))
                 return Results.Json(
-                    new { Error = "KI-Erfassung ist nicht eingerichtet (Gemini:ApiKey fehlt)." },
+                    new { Error = $"KI-Erfassung ist nicht eingerichtet ({provider.ApiKeySetting} fehlt)." },
                     statusCode: StatusCodes.Status503ServiceUnavailable);
 
             // Die Grenzpruefungen stehen vor dem Zaehler und vor dem Gemini-Aufruf: eine Eingabe,

@@ -253,6 +253,13 @@ public class AiFailureLogTests(AiFailureLogTests.AdminCapableFactory factory)
 
             var eintrag = Assert.Single(eintraege.EnumerateArray());
             Assert.Equal("openrouter", eintrag.GetProperty("provider").GetString());
+
+            // Abschluss-Review Befund 2: vor dem Fix stand hier IMMER Geminis Modell und dessen
+            // Denkstufe, egal welcher Anbieter tatsaechlich ausgefallen war. Ein Test, der nur den
+            // Anbieter prueft, bliebe gegen diesen Fehler gruen - deshalb hier ausdruecklich das
+            // OpenRouter-Modell UND die fehlende Denkstufe.
+            Assert.Equal(AiSettingsProvider.DefaultOpenRouterModel, eintrag.GetProperty("model").GetString());
+            Assert.Equal(JsonValueKind.Null, eintrag.GetProperty("thinkingLevel").ValueKind);
         }
         finally
         {

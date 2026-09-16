@@ -27,6 +27,8 @@ public class OpenRouterService(
 
     public string Name => IAiProvider.OpenRouter;
 
+    public string ApiKeySetting => "OpenRouter:ApiKey";
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     /// <summary>
@@ -230,7 +232,11 @@ public class OpenRouterService(
     /// <summary>
     /// Liest aus einem 429 die Fehlermeldung, damit sie im Log und in der Ausnahme steht statt
     /// nur "429". OpenRouter unterscheidet - anders als Google - keine Minuten- und Tagesgrenze
-    /// im Rumpf, deshalb bleibt Scope hier Unknown; es gibt schlicht nichts auszulesen.
+    /// ueber ein eigenes Feld, nur im Fliesstext von message ("Rate limit exceeded:
+    /// free-models-per-day", belegt im eigenen Teststub). Ohne diese Zuordnung liest der Nutzer
+    /// bei einer Tagessperre "Versuche es gleich noch einmal" - wortwoertlich der Fehler,
+    /// dessentwegen dieser Branch gebaut wurde: eine Wartezeit im Sekundenbereich fuer eine
+    /// Sperre, die bis morgen gilt.
     /// </summary>
     private async Task<AiQuotaException> ReadQuotaFailureAsync(HttpResponseMessage response, CancellationToken ct)
     {
@@ -252,9 +258,22 @@ public class OpenRouterService(
             // Ein 429 ohne lesbaren Rumpf bleibt ein 429 - nur eben ohne Begruendung.
         }
 
-        logger.LogWarning("OpenRouter lehnte mit 429 ab: {Message}", message ?? "unbekannt");
+        var scope = message?.Contains("per-day", StringComparison.OrdinalIgnoreCase) == true
+            ? AiQuotaScope.PerDay
+            : AiQuotaScope.Unknown;
 
-        return new AiQuotaException(message ?? "OpenRouter: Mengengrenze gerissen.");
+        // Der HTTP-Kopf ist eine zweite moegliche Quelle fuer die Wartezeit - dieselbe Lesart wie
+        // in GeminiService.ReadQuotaFailureAsync. OpenRouter nennt im Rumpf selbst keine
+        // Wartezeit (kein RetryInfo-Gegenstueck), deshalb bleibt das der einzige Weg dorthin.
+        var retryAfter = response.Headers.RetryAfter?.Delta
+            ?? (response.Headers.RetryAfter?.Date is { } date && date > timeProvider.GetUtcNow()
+                ? date - timeProvider.GetUtcNow()
+                : null);
+
+        logger.LogWarning(
+            "OpenRouter lehnte mit 429 ab ({Scope}): {Message}", scope, message ?? "unbekannt");
+
+        return new AiQuotaException(message ?? "OpenRouter: Mengengrenze gerissen.", scope, retryAfter);
     }
 
     /// <summary>
@@ -293,6 +312,12 @@ public class OpenRouterService(
     /// geantwortet, aber nicht im vereinbarten Format. Ohne diesen Fang floege eine rohe
     /// JsonException heraus, die kein Endpunkt kennt (AiFailureResponse faengt nur AiUnavailable-,
     /// AiQuota- und AiMalformedResponseException), und der Nutzer saehe einen 500 ohne Rumpf.
+    ///
+    /// ValueKind wird bei error UND bei message geprueft, nicht nur TryGetProperty: ein Rumpf wie
+    /// {"error":"ueberlastet"} oder eine message, die kein String ist, liesse TryGetProperty bzw.
+    /// GetString() sonst eine InvalidOperationException werfen - dieselbe Kategorie Fehler, die
+    /// der JsonException-Fang zwei Zeilen weiter oben bereits fuer "gar kein JSON" abfaengt.
+    /// ReadQuotaFailureAsync macht diese Pruefung fuer message bereits richtig.
     /// </summary>
     private static void ThrowIfErrorInBody(string body, Func<string, Exception?, Exception> unavailable)
     {
@@ -314,7 +339,12 @@ public class OpenRouterService(
                 return;
             }
 
-            var message = error.TryGetProperty("message", out var m) ? m.GetString() : null;
+            var message = error.ValueKind == JsonValueKind.Object
+                && error.TryGetProperty("message", out var m)
+                && m.ValueKind == JsonValueKind.String
+                ? m.GetString()
+                : null;
+
             throw unavailable($"OpenRouter meldet: {message ?? "unbekannter Fehler"}", null);
         }
     }

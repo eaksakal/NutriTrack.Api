@@ -91,7 +91,7 @@ public static class AdminEndpoints
             // Kommentar an TryAcquire unten).
             // Welcher Schluessel gemeint ist, haengt am GEWAEHLTEN Anbieter: eine Probe, die wegen
             // des falschen Schluessels 503 meldet, waere schlimmer als gar keine Pruefung.
-            var apiKeySetting = provider.Name == IAiProvider.OpenRouter ? "OpenRouter:ApiKey" : "Gemini:ApiKey";
+            var apiKeySetting = provider.ApiKeySetting;
             if (string.IsNullOrWhiteSpace(configuration[apiKeySetting]))
                 return Results.Json(
                     new { Error = $"Verbindungstest ist nicht möglich ({apiKeySetting} fehlt)." },

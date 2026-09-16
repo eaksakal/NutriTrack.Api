@@ -101,6 +101,35 @@ public class OpenRouterServiceTests(NutriTrackApiFactory factory) : IClassFixtur
     }
 
     [Fact]
+    public async Task ParseAsync_WithNonObjectErrorInsideA200_ReportsItAsUnavailable()
+    {
+        // Abschluss-Review Befund 5: {"error":"ueberlastet"} statt {"error":{"message":"..."}}.
+        // Ohne ValueKind-Pruefung auf error selbst wirft TryGetProperty eine
+        // InvalidOperationException, die kein Endpunkt faengt - ein 500 ohne Rumpf statt der
+        // sauberen Anbieterfehlermeldung.
+        factory.OpenRouterResponder = _ => StubOpenRouterHandler.ErrorIsNotAnObject();
+
+        var ex = await Assert.ThrowsAsync<AiUnavailableException>(() => Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "ein Apfel" }], string.Empty, CancellationToken.None));
+
+        Assert.Contains("unbekannter Fehler", ex.Detail);
+    }
+
+    [Fact]
+    public async Task ParseAsync_WithNonStringErrorMessageInsideA200_ReportsItAsUnavailable()
+    {
+        // Abschluss-Review Befund 5, zweite Haelfte: error ist ein Objekt, aber message ist keine
+        // Zeichenkette. GetString() ohne ValueKind-Pruefung wirft hier dieselbe
+        // InvalidOperationException wie beim Fall oben.
+        factory.OpenRouterResponder = _ => StubOpenRouterHandler.ErrorMessageIsNotAString();
+
+        var ex = await Assert.ThrowsAsync<AiUnavailableException>(() => Service().ParseAsync(
+            [new ChatMessage { Role = "user", Text = "ein Apfel" }], string.Empty, CancellationToken.None));
+
+        Assert.Contains("unbekannter Fehler", ex.Detail);
+    }
+
+    [Fact]
     public async Task ParseAsync_WithNonJsonBodyInsideA200_ReportsSchemaBreak()
     {
         // Status 200, aber der Rumpf ist gar kein JSON - eine Gateway- oder Wartungsseite. Ohne
@@ -119,8 +148,13 @@ public class OpenRouterServiceTests(NutriTrackApiFactory factory) : IClassFixtur
     {
         factory.OpenRouterResponder = _ => StubOpenRouterHandler.RateLimited();
 
-        await Assert.ThrowsAsync<AiQuotaException>(() => Service().ParseAsync(
+        var ex = await Assert.ThrowsAsync<AiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }], string.Empty, CancellationToken.None));
+
+        // Abschluss-Review Befund 3: der Stub-Wortlaut ("free-models-per-day") muss auf PerDay
+        // abgebildet werden, sonst liest der Nutzer bei einer Tagessperre "Versuche es gleich
+        // noch einmal" - der Fehler, dessentwegen dieser Branch gebaut wurde.
+        Assert.Equal(AiQuotaScope.PerDay, ex.Scope);
     }
 
     [Fact]

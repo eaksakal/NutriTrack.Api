@@ -38,7 +38,9 @@ public enum AiQuotaScope
     /// <summary>Anfragen pro Minute — in Sekunden vorbei, kein Grund zur Aufregung.</summary>
     PerMinute,
 
-    /// <summary>Anfragen pro Tag — bis Mitternacht (Pazifik) ist Schluss.</summary>
+    /// <summary>Anfragen pro Tag — wann genau die Sperre faellt, ist anbieterabhaengig (Google:
+    /// Mitternacht Pazifik; OpenRouter nennt dazu keine Uhrzeit). In jedem Fall Stunden, nicht
+    /// Sekunden.</summary>
     PerDay,
 }
 
@@ -136,6 +138,8 @@ public class GeminiService(
     TimeProvider timeProvider) : IAiProvider
 {
     public string Name => IAiProvider.Gemini;
+
+    public string ApiKeySetting => "Gemini:ApiKey";
 
     private const string Endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions";
 
