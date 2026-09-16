@@ -102,10 +102,12 @@ Die Probe nutzt eine **feste** Beispieleingabe („zwei Broetchen mit Gouda"), k
 so ist das Ergebnis zwischen zwei Läufen vergleichbar, und die Probe kann nicht versehentlich zum
 Weg werden, auf dem Mahlzeitentexte zusätzlich an Google gehen.
 
-Die Probe zählt gegen dasselbe Minutenkontingent wie die normale Erfassung (20 Anfragen). Sie
-unterliegt deshalb demselben `AiRateLimiter` wie `/api/ai/parse-meal` — ein Admin, der den Knopf
-zwanzigmal drückt, legt sonst seine eigene Erfassung lahm. Genau das ist am 2026-09-15 passiert,
-als die Diagnose das Kontingent aufbrauchte.
+Jede Probe verbraucht eine Anfrage aus Googles Minutenkontingent (20), dasselbe, aus dem sich die
+normale Erfassung bedient. Sie läuft deshalb durch denselben `AiRateLimiter` wie
+`/api/ai/parse-meal` — der ist zwar ein Stundenzähler und kein Minutenzähler, aber er ist die
+vorhandene Bremse, und eine zweite daneben zu stellen hieße zwei Zähler zu pflegen. Ein Admin, der
+den Knopf in Folge drückt, legt sonst seine eigene Erfassung lahm: genau das ist am 2026-09-15
+passiert, als die Diagnose das Kontingent aufbrauchte und die Erfassung danach nur noch 429 sah.
 
 ### Fehlerprotokoll
 
