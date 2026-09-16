@@ -60,6 +60,11 @@ public class AiFailureLogEntry
 {
     public DateTime OccurredAt { get; set; }
     public string Kind { get; set; } = string.Empty;
+
+    /// <summary>"gemini" oder "openrouter", zum Zeitpunkt des Fehlschlags. Ohne dieses Feld steht
+    /// nach einem Wechsel nicht mehr fest, welcher Dienst welchen Fehlschlag verursacht hat.</summary>
+    public string? Provider { get; set; }
+
     public string? Model { get; set; }
     public string? ThinkingLevel { get; set; }
     public int? DurationMs { get; set; }

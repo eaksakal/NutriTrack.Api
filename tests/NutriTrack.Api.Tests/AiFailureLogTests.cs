@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using NutriTrack.Api.Services;
@@ -9,8 +11,28 @@ using NutriTrack.Infrastructure.Data;
 
 namespace NutriTrack.Api.Tests;
 
-public class AiFailureLogTests(NutriTrackApiFactory factory) : IClassFixture<NutriTrackApiFactory>
+public class AiFailureLogTests(AiFailureLogTests.AdminCapableFactory factory)
+    : IClassFixture<AiFailureLogTests.AdminCapableFactory>
 {
+    /// <summary>
+    /// Admin-faehige Fassung der Standard-Factory. Review-Befund 2 verlangt, den
+    /// Anbieter-Fehlschlag ueber GET /api/admin/failures zu lesen statt an der API vorbei direkt
+    /// aus der Entitaet - nur so deckt derselbe Test zugleich ab, dass die Spalte tatsaechlich
+    /// beim Betrachter ankommt (Befund 1). Eine feste Administrator-Adresse genuegt dafuer: kein
+    /// anderer Test dieser Datei registriert sie, und ausserhalb dieser Datei ruft niemand
+    /// /api/admin/* ueber diese Factory auf - die Admin-Rechte hier stoeren also nirgends.
+    /// </summary>
+    public sealed class AdminCapableFactory : NutriTrackApiFactory
+    {
+        public const string AdminEmail = "chef@example.com";
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.UseSetting("Admin:Email", AdminEmail);
+        }
+    }
+
     private async Task<List<AiFailure>> ProtokollAsync()
     {
         using var scope = factory.Services.CreateScope();
@@ -23,6 +45,29 @@ public class AiFailureLogTests(NutriTrackApiFactory factory) : IClassFixture<Nut
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.AiFailures.ExecuteDeleteAsync();
+    }
+
+    /// <summary>
+    /// Schreibt den Anbieter direkt in die Datenbank und verwirft den Cache - dieselbe
+    /// Vorgehensweise wie AiProviderFactoryTests.SetzeAnbieterAsync. null heisst "zurueck zum
+    /// Vorgabewert (gemini)", nicht "leerer Wert".
+    /// </summary>
+    private async Task SetzeAnbieterAsync(string? provider)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var vorhandene = await db.AiSettings.SingleOrDefaultAsync();
+        if (vorhandene is not null)
+            db.AiSettings.Remove(vorhandene);
+        await db.SaveChangesAsync();
+
+        if (provider is not null)
+        {
+            db.AiSettings.Add(new AiSettings { Id = 1, Provider = provider, UpdatedAt = DateTime.UtcNow });
+            await db.SaveChangesAsync();
+        }
+
+        factory.Services.GetRequiredService<AiSettingsProvider>().Invalidate();
     }
 
     [Fact]
@@ -181,19 +226,39 @@ public class AiFailureLogTests(NutriTrackApiFactory factory) : IClassFixture<Nut
     public async Task Failure_RecordsWhichProviderItWas()
     {
         await LeereAsync();
-        var (client, _, _) = await factory.CreateUserAsync();
+        var (client, _, _) = await factory.CreateUserAsync(AdminCapableFactory.AdminEmail);
 
-        factory.GeminiResponder = _ => throw new TaskCanceledException("Zeitdeckel im Test.");
-
-        await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        // Provoziert bewusst MIT dem aktiven Anbieter openrouter statt mit dem Vorgabewert: ein
+        // fest verdrahtetes "gemini" im Recorder bliebe gegen den Vorgabewert weiterhin gruen und
+        // bewiese damit nicht, dass die Spalte dem AKTIVEN Anbieter folgt (Review-Befund 2). Die
+        // Testklasse teilt Datenbank und AiSettingsProvider-Singleton mit den uebrigen Tests
+        // dieser Datei, deshalb im finally wieder auf den Vorgabewert zurueckstellen.
+        await SetzeAnbieterAsync("openrouter");
+        try
         {
-            messages = new[] { new { role = "user", text = "ein Apfel" } }
-        });
+            factory.OpenRouterResponder = _ => throw new TaskCanceledException("Zeitdeckel im Test.");
 
-        // Ohne diese Spalte steht nach einem Wechsel nicht mehr fest, welcher Dienst welchen
-        // Fehlschlag verursacht hat - und genau der Vergleich ist der Grund, warum es zwei gibt.
-        var eintrag = Assert.Single(await ProtokollAsync());
-        Assert.Equal("gemini", eintrag.Provider);
+            await client.PostAsJsonAsync("/api/ai/parse-meal", new
+            {
+                messages = new[] { new { role = "user", text = "ein Apfel" } }
+            });
+
+            // UEBER DEN ENDPUNKT gelesen, nicht an der API vorbei: sonst bliebe unbemerkt, dass
+            // AiFailureLogEntry und die Select-Projektion in AdminEndpoints.cs das Feld nie
+            // ausliefern (Review-Befund 1) - die Spalte in der Datenbank allein nuetzt niemandem
+            // an der Oberflaeche.
+            var antwort = await client.GetAsync("/api/admin/failures");
+            antwort.EnsureSuccessStatusCode();
+            var eintraege = await antwort.Content.ReadFromJsonAsync<JsonElement>();
+
+            var eintrag = Assert.Single(eintraege.EnumerateArray());
+            Assert.Equal("openrouter", eintrag.GetProperty("provider").GetString());
+        }
+        finally
+        {
+            await SetzeAnbieterAsync(null);
+            await LeereAsync();
+        }
     }
 
     [Fact]

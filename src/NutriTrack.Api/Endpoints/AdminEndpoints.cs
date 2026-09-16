@@ -133,6 +133,7 @@ public static class AdminEndpoints
                 {
                     OccurredAt = f.OccurredAt,
                     Kind = f.Kind,
+                    Provider = f.Provider,
                     Model = f.Model,
                     ThinkingLevel = f.ThinkingLevel,
                     DurationMs = f.DurationMs,

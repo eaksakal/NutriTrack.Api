@@ -69,10 +69,21 @@ public static class GoalsEndpoints
             decimal? intensitaet = null;
             var deutung = "Gewicht halten.";
 
+            // Einmal ermittelt und fuer Schluesselpruefung UND Aufruf wiederverwendet: sonst
+            // koennte zwischen beiden ein Umschalten liegen, und der gepruefte Schluessel waere
+            // nicht mehr der des tatsaechlich aufgerufenen Anbieters.
+            var provider = providerFactory.Current();
+
             // Ohne Wunsch und ohne eingerichtete KI wird einfach der Erhaltungsbedarf gerechnet -
-            // das ist eine brauchbare Antwort und kein Fehlerfall.
+            // das ist eine brauchbare Antwort und kein Fehlerfall. Welcher Schluessel gemeint ist,
+            // haengt am GEWAEHLTEN Anbieter (derselbe Kniff wie im Probe-Endpunkt in
+            // AdminEndpoints): sonst wuerde bei gewaehltem OpenRouter ein fehlender
+            // Gemini:ApiKey die Deutung still uebergehen, obwohl OpenRouter einsatzbereit waere -
+            // oder umgekehrt ein vorhandener Gemini:ApiKey den Aufruf ankuendigen, obwohl der
+            // tatsaechlich benutzte OpenRouter-Schluessel fehlt.
+            var apiKeySetting = provider.Name == IAiProvider.OpenRouter ? "OpenRouter:ApiKey" : "Gemini:ApiKey";
             if (!string.IsNullOrWhiteSpace(request.Wish)
-                && !string.IsNullOrWhiteSpace(configuration["Gemini:ApiKey"]))
+                && !string.IsNullOrWhiteSpace(configuration[apiKeySetting]))
             {
                 var userId = user.FindFirst(ClaimTypes.NameIdentifier)!.Value;
                 if (!limiter.TryAcquire(userId))
@@ -85,7 +96,7 @@ public static class GoalsEndpoints
                 {
                     // HIER GEHT NUR DER WUNSCH RAUS. Gewicht, Groesse, Alter und Geschlecht
                     // bleiben auf diesem Rechner - das ist die Abmachung mit dem Nutzer.
-                    var gedeutet = await providerFactory.Current().ParseWishAsync(request.Wish, ct);
+                    var gedeutet = await provider.ParseWishAsync(request.Wish, ct);
 
                     richtung = gedeutet.Direction switch
                     {
