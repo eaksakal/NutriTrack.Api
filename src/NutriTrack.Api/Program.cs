@@ -96,6 +96,7 @@ builder.Services.AddOpenApi();
 builder.Services.AddScoped<TokenService>();
 builder.Services.AddScoped<AiMealAssistant>();
 builder.Services.AddScoped<AiFailureRecorder>();
+builder.Services.AddScoped<AiProviderFactory>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<AiRateLimiter>();
 builder.Services.AddSingleton<AiSettingsProvider>();
@@ -130,6 +131,14 @@ builder.Services.AddHttpClient<GeminiService>(client =>
     // nach..." zeigt, noch zumutbar ist - darueber gehoert die Erfassung in den Hintergrund.
     // Ueber Gemini__TimeoutSeconds (docker-compose.yml) ohne Neubau nachstellbar.
     var seconds = builder.Configuration.GetValue("Gemini:TimeoutSeconds", 45);
+    client.Timeout = TimeSpan.FromSeconds(seconds);
+});
+
+builder.Services.AddHttpClient<OpenRouterService>(client =>
+{
+    // 90 s statt Geminis 45: die kostenlosen Modelle brauchten am 2026-09-16 gemessene 24 bis
+    // 35 Sekunden. Ein Deckel darunter schluege im Normalbetrieb zu, nicht im Fehlerfall.
+    var seconds = builder.Configuration.GetValue("OpenRouter:TimeoutSeconds", 90);
     client.Timeout = TimeSpan.FromSeconds(seconds);
 });
 

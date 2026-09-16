@@ -120,6 +120,31 @@ public class AdminEndpointTests
     }
 
     [Fact]
+    public async Task Put_SwitchesProviderAndRejectsUnknownOnes()
+    {
+        using var f = new AdminFactory("chef@example.com");
+        await f.ResetDatabaseAsync();
+        var (client, _, _) = await f.CreateUserAsync("chef@example.com");
+
+        var ok = await client.PutAsJsonAsync("/api/admin/settings", new
+        {
+            provider = "openrouter", openRouterModel = "dots-studio/dots-3-note-preview:free"
+        });
+        ok.EnsureSuccessStatusCode();
+
+        var json = await (await client.GetAsync("/api/admin/settings")).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("openrouter", json.GetProperty("provider").GetString());
+        Assert.True(json.GetProperty("providerFromDatabase").GetBoolean());
+
+        var schlecht = await client.PutAsJsonAsync("/api/admin/settings", new { provider = "opendrouter" });
+        Assert.Equal(HttpStatusCode.BadRequest, schlecht.StatusCode);
+
+        // Der abgewiesene Wert darf nichts ueberschrieben haben.
+        var danach = await (await client.GetAsync("/api/admin/settings")).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("openrouter", danach.GetProperty("provider").GetString());
+    }
+
+    [Fact]
     public async Task Probe_CallsGeminiOnceAndReportsResult()
     {
         using var f = new AdminFactory("chef@example.com");
@@ -145,7 +170,7 @@ public class AdminEndpointTests
 
     /// <summary>
     /// Der Blocker aus dem Branch-Review: fehlt der Schluessel, wirft GeminiService.ProbeAsync
-    /// eine GeminiUnavailableException. Ohne die vorab-Pruefung schluege das ungefangen durch -
+    /// eine AiUnavailableException. Ohne die vorab-Pruefung schluege das ungefangen durch -
     /// dieses Projekt hat weder UseExceptionHandler noch AddProblemDetails - und die Oberflaeche
     /// saehe nur "Verbindungstest fehlgeschlagen. (HTTP 500)". Ein fehlender Schluessel ist die
     /// wahrscheinlichste Fehlkonfiguration ueberhaupt; ausgerechnet dafuer muss das Werkzeug, das

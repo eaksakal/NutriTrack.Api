@@ -9,8 +9,14 @@ namespace NutriTrack.Api.Contracts.Admin;
 /// </summary>
 public class AiSettingsResponse
 {
+    public string Provider { get; set; } = string.Empty;
+    public bool ProviderFromDatabase { get; set; }
+
     public string Model { get; set; } = string.Empty;
     public bool ModelFromDatabase { get; set; }
+
+    public string OpenRouterModel { get; set; } = string.Empty;
+    public bool OpenRouterModelFromDatabase { get; set; }
 
     public string ThinkingLevel { get; set; } = string.Empty;
     public bool ThinkingLevelFromDatabase { get; set; }
@@ -24,7 +30,9 @@ public class AiSettingsResponse
 /// </summary>
 public class UpdateAiSettingsRequest
 {
+    public string? Provider { get; set; }
     public string? Model { get; set; }
+    public string? OpenRouterModel { get; set; }
     public string? ThinkingLevel { get; set; }
     public int? MaxOutputTokens { get; set; }
 }
@@ -34,7 +42,11 @@ public class AiProbeResponse
     public int StatusCode { get; set; }
     public long DurationMs { get; set; }
     public string Model { get; set; } = string.Empty;
-    public string ThinkingLevel { get; set; } = string.Empty;
+
+    /// <summary>Null bei einem Anbieter ohne Denkstufe (OpenRouter). Kein Platzhalter wie ""
+    /// oder "-": der wuerde eine Einstellung behaupten, die es dort nicht gibt.</summary>
+    public string? ThinkingLevel { get; set; }
+
     public string RawBody { get; set; } = string.Empty;
 }
 
@@ -48,6 +60,11 @@ public class AiFailureLogEntry
 {
     public DateTime OccurredAt { get; set; }
     public string Kind { get; set; } = string.Empty;
+
+    /// <summary>"gemini" oder "openrouter", zum Zeitpunkt des Fehlschlags. Ohne dieses Feld steht
+    /// nach einem Wechsel nicht mehr fest, welcher Dienst welchen Fehlschlag verursacht hat.</summary>
+    public string? Provider { get; set; }
+
     public string? Model { get; set; }
     public string? ThinkingLevel { get; set; }
     public int? DurationMs { get; set; }

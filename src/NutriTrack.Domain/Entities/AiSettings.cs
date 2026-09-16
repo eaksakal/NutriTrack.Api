@@ -17,5 +17,18 @@ public class AiSettings
     public string? ThinkingLevel { get; set; }
     public int? MaxOutputTokens { get; set; }
 
+    /// <summary>
+    /// "gemini" oder "openrouter". Null heisst wie bei den uebrigen Feldern "nimm die
+    /// Umgebungsvariable", und die steht ohne Eintrag auf Gemini.
+    /// </summary>
+    public string? Provider { get; set; }
+
+    /// <summary>
+    /// Das Modell FUER OPENROUTER, getrennt von <see cref="Model"/>, das Gemini gehoert. Ein
+    /// gemeinsames Feld zwaenge beim Umschalten jedes Mal zum Nachtippen, und der zuletzt
+    /// genutzte Wert des anderen Anbieters waere weg.
+    /// </summary>
+    public string? OpenRouterModel { get; set; }
+
     public DateTime UpdatedAt { get; set; }
 }

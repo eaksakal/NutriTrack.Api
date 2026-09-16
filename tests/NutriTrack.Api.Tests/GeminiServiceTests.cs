@@ -192,7 +192,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
                 """{ "candidates": [], "usageMetadata": {} }""", Encoding.UTF8, "application/json")
         };
 
-        var exception = await Assert.ThrowsAsync<GeminiMalformedResponseException>(() =>
+        var exception = await Assert.ThrowsAsync<AiMalformedResponseException>(() =>
             Service().ParseAsync(
                 [new ChatMessage { Role = "user", Text = "ein Apfel" }],
                 string.Empty, CancellationToken.None));
@@ -212,7 +212,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
     [InlineData("breakfast", "Breakfast")]
     [InlineData("", "Snack")]
     public void NormalizeMealType_BringtDeutscheAntwortenAufDasEnum(string eingabe, string erwartet)
-        => Assert.Equal(erwartet, GeminiService.NormalizeMealType(eingabe));
+        => Assert.Equal(erwartet, AiInstructions.NormalizeMealType(eingabe));
 
     /// <summary>
     /// Der Fall aus der Handprobe gegen den echten Dienst am 2026-09-12: der Prompt ist deutsch,
@@ -278,15 +278,15 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
     /// aufgebraucht — deshalb muss die gerissene Grenze aus dem Rumpf kommen.
     /// </summary>
     [Theory]
-    [InlineData("GenerateRequestsPerMinutePerProjectPerModel", GeminiQuotaScope.PerMinute)]
-    [InlineData("GenerateRequestsPerDayPerProjectPerModel", GeminiQuotaScope.PerDay)]
-    [InlineData("SomethingUnheardOf", GeminiQuotaScope.Unknown)]
+    [InlineData("GenerateRequestsPerMinutePerProjectPerModel", AiQuotaScope.PerMinute)]
+    [InlineData("GenerateRequestsPerDayPerProjectPerModel", AiQuotaScope.PerDay)]
+    [InlineData("SomethingUnheardOf", AiQuotaScope.Unknown)]
     public async Task ParseAsync_BeiQuotaFehler_LiestDieGerisseneGrenzeAusDemRumpf(
-        string quotaId, GeminiQuotaScope erwartet)
+        string quotaId, AiQuotaScope erwartet)
     {
         factory.GeminiResponder = _ => StubGeminiHandler.QuotaFailure(quotaId, "27s");
 
-        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+        var ex = await Assert.ThrowsAsync<AiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
             string.Empty, CancellationToken.None));
 
@@ -299,11 +299,11 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
     {
         factory.GeminiResponder = _ => StubGeminiHandler.QuotaFailure("GenerateRequestsPerDayPerProjectPerModel");
 
-        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+        var ex = await Assert.ThrowsAsync<AiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
             string.Empty, CancellationToken.None));
 
-        Assert.Equal(GeminiQuotaScope.PerDay, ex.Scope);
+        Assert.Equal(AiQuotaScope.PerDay, ex.Scope);
         Assert.Null(ex.RetryAfter);
     }
 
@@ -318,7 +318,7 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
     {
         factory.GeminiResponder = _ => StubGeminiHandler.InteractionsQuotaFailure();
 
-        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+        var ex = await Assert.ThrowsAsync<AiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
             string.Empty, CancellationToken.None));
 
@@ -330,14 +330,14 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
     /// greifen - sonst haette das Nachziehen nur die halbe Arbeit getan.
     /// </summary>
     [Theory]
-    [InlineData("generativelanguage.googleapis.com/generate_requests_per_model_per_day", GeminiQuotaScope.PerDay)]
-    [InlineData("generativelanguage.googleapis.com/generate_requests_per_model_per_minute", GeminiQuotaScope.PerMinute)]
-    [InlineData("generativelanguage.googleapis.com/generate_content_free_tier_requests", GeminiQuotaScope.Unknown)]
-    public async Task ParseAsync_BeiFlachemQuotaFehler_DeutetDieMetrik(string metric, GeminiQuotaScope erwartet)
+    [InlineData("generativelanguage.googleapis.com/generate_requests_per_model_per_day", AiQuotaScope.PerDay)]
+    [InlineData("generativelanguage.googleapis.com/generate_requests_per_model_per_minute", AiQuotaScope.PerMinute)]
+    [InlineData("generativelanguage.googleapis.com/generate_content_free_tier_requests", AiQuotaScope.Unknown)]
+    public async Task ParseAsync_BeiFlachemQuotaFehler_DeutetDieMetrik(string metric, AiQuotaScope erwartet)
     {
         factory.GeminiResponder = _ => StubGeminiHandler.InteractionsQuotaFailure(metric);
 
-        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+        var ex = await Assert.ThrowsAsync<AiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
             string.Empty, CancellationToken.None));
 
@@ -363,14 +363,14 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
             Content = new StringContent(echterRumpf, System.Text.Encoding.UTF8, "application/json")
         };
 
-        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+        var ex = await Assert.ThrowsAsync<AiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
             string.Empty, CancellationToken.None));
 
         Assert.Equal(TimeSpan.FromSeconds(39.826942774), ex.RetryAfter);
 
         // Diese Metrik nennt weder Minute noch Tag - dann wird auch keins von beidem behauptet.
-        Assert.Equal(GeminiQuotaScope.Unknown, ex.Scope);
+        Assert.Equal(AiQuotaScope.Unknown, ex.Scope);
     }
 
     /// <summary>Nennt Google keine Wartezeit, wird auch keine erfunden.</summary>
@@ -379,12 +379,12 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
     {
         factory.GeminiResponder = _ => StubGeminiHandler.InteractionsQuotaFailure(retryIn: null);
 
-        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+        var ex = await Assert.ThrowsAsync<AiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
             string.Empty, CancellationToken.None));
 
         Assert.Null(ex.RetryAfter);
-        Assert.Equal(GeminiQuotaScope.Unknown, ex.Scope);
+        Assert.Equal(AiQuotaScope.Unknown, ex.Scope);
     }
 
     [Fact]
@@ -392,11 +392,11 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
     {
         factory.GeminiResponder = _ => StubGeminiHandler.TooManyRequestsWithRetryAfterHeader(42);
 
-        var ex = await Assert.ThrowsAsync<GeminiQuotaException>(() => Service().ParseAsync(
+        var ex = await Assert.ThrowsAsync<AiQuotaException>(() => Service().ParseAsync(
             [new ChatMessage { Role = "user", Text = "ein Apfel" }],
             string.Empty, CancellationToken.None));
 
-        Assert.Equal(GeminiQuotaScope.Unknown, ex.Scope);
+        Assert.Equal(AiQuotaScope.Unknown, ex.Scope);
         Assert.Equal(TimeSpan.FromSeconds(42), ex.RetryAfter);
     }
 
@@ -554,5 +554,17 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
 
         Assert.Equal(429, result.StatusCode);
         Assert.Contains("quota", result.RawBody, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GeminiService_IsAnAiProvider()
+    {
+        // Die Anwendung soll den Anbieter ueber die Schnittstelle ansprechen, nicht ueber den
+        // konkreten Typ - sonst entscheidet die Registrierung beim Start, was erst zur Laufzeit
+        // feststeht.
+        IAiProvider provider = Service();
+
+        Assert.Equal(IAiProvider.Gemini, provider.Name);
+        Assert.Equal("gemini", provider.Name);
     }
 }

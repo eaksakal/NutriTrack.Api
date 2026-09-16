@@ -198,4 +198,79 @@ public class AiSettingsProviderTests(NutriTrackApiFactory factory) : IClassFixtu
         Assert.Equal("gemini-3.1-flash-lite", nachDerErholung.Model);
         Assert.True(nachDerErholung.ModelFromDb);
     }
+
+    [Fact]
+    public async Task Read_WithoutRow_UsesGeminiAsProvider()
+    {
+        await LeereAsync();
+
+        var snapshot = Provider().Read();
+
+        // Ohne Eintrag bleibt alles wie vor diesem Feature - ein neuer Anbieter darf sich nicht
+        // dadurch einschalten, dass jemand die Tabelle leert.
+        Assert.Equal("gemini", snapshot.Provider);
+        Assert.False(snapshot.ProviderFromDb);
+    }
+
+    [Fact]
+    public async Task Read_WithStoredProvider_PrefersIt()
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var vorhandene = await db.AiSettings.SingleOrDefaultAsync();
+        if (vorhandene is not null)
+            db.AiSettings.Remove(vorhandene);
+        await db.SaveChangesAsync();
+
+        db.AiSettings.Add(new AiSettings
+        {
+            Id = 1,
+            Provider = "openrouter",
+            OpenRouterModel = "dots-studio/dots-3-note-preview:free",
+            Model = "gemini-3.6-flash",
+            UpdatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+        Provider().Invalidate();
+
+        var snapshot = Provider().Read();
+
+        Assert.Equal("openrouter", snapshot.Provider);
+        Assert.True(snapshot.ProviderFromDb);
+        Assert.Equal("dots-studio/dots-3-note-preview:free", snapshot.OpenRouterModel);
+        Assert.True(snapshot.OpenRouterModelFromDb);
+        // Geminis Modell bleibt daneben stehen - Zurueckschalten soll kein Nachtippen kosten.
+        Assert.Equal("gemini-3.6-flash", snapshot.Model);
+
+        db.AiSettings.Remove(await db.AiSettings.SingleAsync());
+        await db.SaveChangesAsync();
+        Provider().Invalidate();
+    }
+
+    [Fact]
+    public async Task Read_WithUnknownProvider_FallsBackToGemini()
+    {
+        // Ein Tippfehler in der Datenbank darf die Erfassung nicht lahmlegen.
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var vorhandene = await db.AiSettings.SingleOrDefaultAsync();
+        if (vorhandene is not null)
+            db.AiSettings.Remove(vorhandene);
+        await db.SaveChangesAsync();
+
+        db.AiSettings.Add(new AiSettings { Id = 1, Provider = "opendrouter", UpdatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+        Provider().Invalidate();
+
+        try
+        {
+            Assert.Equal("gemini", Provider().Read().Provider);
+        }
+        finally
+        {
+            db.AiSettings.Remove(await db.AiSettings.SingleAsync());
+            await db.SaveChangesAsync();
+            Provider().Invalidate();
+        }
+    }
 }

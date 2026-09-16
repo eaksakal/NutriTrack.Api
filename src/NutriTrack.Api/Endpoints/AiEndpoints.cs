@@ -13,6 +13,7 @@ public static class AiEndpoints
         group.MapPost("/parse-meal", async (
             ParseMealRequest request,
             IConfiguration configuration,
+            AiProviderFactory providerFactory,
             AiMealAssistant assistant,
             ClaimsPrincipal user,
             AiRateLimiter limiter,
@@ -25,9 +26,15 @@ public static class AiEndpoints
 
             // Fehlender Schluessel ist hier bewusst KEIN Startabbruch wie beim Jwt-Schluessel:
             // ein nicht eingerichtetes Zusatzfeature darf das Tagebuch nicht lahmlegen.
-            if (string.IsNullOrWhiteSpace(configuration["Gemini:ApiKey"]))
+            // Welcher Schluessel gemeint ist, haengt am GEWAEHLTEN Anbieter (derselbe Kniff wie im
+            // Probe-Endpunkt in AdminEndpoints und im Vorschlag-Endpunkt in GoalsEndpoints): sonst
+            // meldete diese Kernfunktion bei gewaehltem OpenRouter immer 503 wegen des fehlenden
+            // Gemini:ApiKey, obwohl OpenRouter einsatzbereit waere - der Grund, warum dieser
+            // Branch fuer genau die Konfiguration, fuer die es ihn gibt, tot war.
+            var provider = providerFactory.Current();
+            if (string.IsNullOrWhiteSpace(configuration[provider.ApiKeySetting]))
                 return Results.Json(
-                    new { Error = "KI-Erfassung ist nicht eingerichtet (Gemini:ApiKey fehlt)." },
+                    new { Error = $"KI-Erfassung ist nicht eingerichtet ({provider.ApiKeySetting} fehlt)." },
                     statusCode: StatusCodes.Status503ServiceUnavailable);
 
             // Die Grenzpruefungen stehen vor dem Zaehler und vor dem Gemini-Aufruf: eine Eingabe,
@@ -50,12 +57,12 @@ public static class AiEndpoints
                 var result = await assistant.ParseAsync(request.Messages, userId, ct);
                 return Results.Ok(result);
             }
-            catch (GeminiQuotaException ex)
+            catch (AiQuotaException ex)
             {
                 await recorder.RecordAsync("Quota", ex.Message, uhr.ElapsedMilliseconds, 429);
                 return AiQuotaResponse.From(ex, httpResponse);
             }
-            catch (GeminiMalformedResponseException ex)
+            catch (AiMalformedResponseException ex)
             {
                 await recorder.RecordAsync("Schema", ex.Message, uhr.ElapsedMilliseconds, null);
 
@@ -66,7 +73,7 @@ public static class AiEndpoints
                     "Die KI hat unverständlich geantwortet. Formuliere es bitte anders.",
                     StatusCodes.Status502BadGateway);
             }
-            catch (GeminiUnavailableException ex)
+            catch (AiUnavailableException ex)
             {
                 // Zeitdeckel und Netzausfall sehen von aussen gleich aus, verlangen aber
                 // Verschiedenes: der eine ist eine Frage der Einstellung, der andere nicht. Ein

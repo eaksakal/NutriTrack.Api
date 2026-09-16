@@ -611,6 +611,55 @@ public class AiEndpointTests(NutriTrackApiFactory factory) : IClassFixture<Nutri
         }
     }
 
+    /// <summary>
+    /// Abschluss-Review Befund 1: eine Instanz, die NUR NUTRITRACK_OPENROUTER_KEY gesetzt hat -
+    /// .env.example bietet ihn als gleichrangige Einstellung an. Vor dem Fix verlangte
+    /// AiEndpoints unbedingt Gemini:ApiKey und lieferte hier bei JEDER Erfassung 503, obwohl
+    /// Handprobe und Zielvorschlag unter demselben Anbieter liefen.
+    /// </summary>
+    private sealed class OpenRouterOnlyFactory : NutriTrackApiFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.UseSetting("Gemini:ApiKey", null);
+            builder.UseSetting("Ai:Provider", "openrouter");
+        }
+    }
+
+    /// <summary>
+    /// Der Nachweis zu Befund 1: nicht nur "kein 503 mehr", sondern eine ECHTE Erfassung Ende zu
+    /// Ende ueber den einzig konfigurierten Anbieter - die Kernfunktion, fuer die dieser ganze
+    /// Branch existiert.
+    /// </summary>
+    [Fact]
+    public async Task ParseMeal_WithOnlyOpenRouterKeyConfigured_StillParsesAMeal()
+    {
+        using var openRouterOnly = new OpenRouterOnlyFactory();
+        await openRouterOnly.ResetDatabaseAsync();
+
+        openRouterOnly.OpenRouterResponder = _ => StubOpenRouterHandler.Payload("""
+        {
+          "items": [
+            { "searchTerm": "Apfel", "label": "Apfel", "quantityInGrams": 150, "mealType": "Snack",
+              "productKind": "generic",
+              "estimate": { "calories": 52, "protein": 0.3, "carbohydrates": 14, "fat": 0.2 } }
+          ]
+        }
+        """);
+
+        var (client, _, _) = await openRouterOnly.CreateUserAsync();
+
+        var response = await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "ein Apfel" } }
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var parsed = await response.Content.ReadFromJsonAsync<ParseMealResponseDto>();
+        Assert.Equal("generic", Assert.Single(parsed!.Items).Source);
+    }
+
     /// <summary>Auch der Mahlzeiten-Weg darf die Minutengrenze nicht als Tagesende ausgeben.</summary>
     [Fact]
     public async Task ParseMeal_BeiMinutengrenze_SetztRetryAfterUndNenntDieWartezeit()

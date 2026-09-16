@@ -31,7 +31,7 @@ public static class GoalsEndpoints
         group.MapPost("/suggest", async (
             SuggestGoalsRequest request,
             IConfiguration configuration,
-            GeminiService gemini,
+            AiProviderFactory providerFactory,
             ClaimsPrincipal user,
             AiRateLimiter limiter,
             HttpResponse httpResponse,
@@ -69,10 +69,21 @@ public static class GoalsEndpoints
             decimal? intensitaet = null;
             var deutung = "Gewicht halten.";
 
+            // Einmal ermittelt und fuer Schluesselpruefung UND Aufruf wiederverwendet: sonst
+            // koennte zwischen beiden ein Umschalten liegen, und der gepruefte Schluessel waere
+            // nicht mehr der des tatsaechlich aufgerufenen Anbieters.
+            var provider = providerFactory.Current();
+
             // Ohne Wunsch und ohne eingerichtete KI wird einfach der Erhaltungsbedarf gerechnet -
-            // das ist eine brauchbare Antwort und kein Fehlerfall.
+            // das ist eine brauchbare Antwort und kein Fehlerfall. Welcher Schluessel gemeint ist,
+            // haengt am GEWAEHLTEN Anbieter (derselbe Kniff wie im Probe-Endpunkt in
+            // AdminEndpoints): sonst wuerde bei gewaehltem OpenRouter ein fehlender
+            // Gemini:ApiKey die Deutung still uebergehen, obwohl OpenRouter einsatzbereit waere -
+            // oder umgekehrt ein vorhandener Gemini:ApiKey den Aufruf ankuendigen, obwohl der
+            // tatsaechlich benutzte OpenRouter-Schluessel fehlt.
+            var apiKeySetting = provider.ApiKeySetting;
             if (!string.IsNullOrWhiteSpace(request.Wish)
-                && !string.IsNullOrWhiteSpace(configuration["Gemini:ApiKey"]))
+                && !string.IsNullOrWhiteSpace(configuration[apiKeySetting]))
             {
                 var userId = user.FindFirst(ClaimTypes.NameIdentifier)!.Value;
                 if (!limiter.TryAcquire(userId))
@@ -85,7 +96,7 @@ public static class GoalsEndpoints
                 {
                     // HIER GEHT NUR DER WUNSCH RAUS. Gewicht, Groesse, Alter und Geschlecht
                     // bleiben auf diesem Rechner - das ist die Abmachung mit dem Nutzer.
-                    var gedeutet = await gemini.ParseWishAsync(request.Wish, ct);
+                    var gedeutet = await provider.ParseWishAsync(request.Wish, ct);
 
                     richtung = gedeutet.Direction switch
                     {
@@ -104,12 +115,12 @@ public static class GoalsEndpoints
                     intensitaet = gedeutet.IntensityPercent;
                     deutung = gedeutet.Interpretation;
                 }
-                catch (GeminiQuotaException ex)
+                catch (AiQuotaException ex)
                 {
                     await recorder.RecordAsync("Quota", ex.Message, uhr.ElapsedMilliseconds, 429);
                     return AiQuotaResponse.From(ex, httpResponse);
                 }
-                catch (GeminiMalformedResponseException ex)
+                catch (AiMalformedResponseException ex)
                 {
                     await recorder.RecordAsync("Schema", ex.Message, uhr.ElapsedMilliseconds, null);
                     return AiFailureResponse.From(
@@ -117,7 +128,7 @@ public static class GoalsEndpoints
                         "Die KI ist gerade nicht erreichbar. Du kannst die Ziele von Hand eintragen.",
                         StatusCodes.Status503ServiceUnavailable);
                 }
-                catch (GeminiUnavailableException ex)
+                catch (AiUnavailableException ex)
                 {
                     // Dieselbe Unterscheidung wie in AiEndpoints: der Typ der inneren Ausnahme
                     // entscheidet ueber Timeout vs. Unavailable, nie ein Wortabgleich auf

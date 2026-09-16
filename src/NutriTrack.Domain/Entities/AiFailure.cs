@@ -18,6 +18,11 @@ public class AiFailure
     /// <summary>"Timeout", "Schema", "Quota" oder "Unavailable".</summary>
     public string Kind { get; set; } = string.Empty;
 
+    /// <summary>"gemini" oder "openrouter", ZUM ZEITPUNKT DES FEHLSCHLAGS. Ohne dieses Feld steht
+    /// nach einem Wechsel nicht mehr fest, welcher Dienst welchen Fehlschlag verursacht hat - und
+    /// genau dieser Vergleich ist der Grund, warum es zwei Anbieter gibt.</summary>
+    public string? Provider { get; set; }
+
     /// <summary>Modell und Denkstufe ZUM ZEITPUNKT DES FEHLSCHLAGS - der Sinn des Protokolls ist
     /// der Vergleich vorher/nachher, und der geht verloren, wenn hier der aktuelle Wert stuende.</summary>
     public string? Model { get; set; }

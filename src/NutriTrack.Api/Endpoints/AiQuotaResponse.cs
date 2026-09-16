@@ -9,7 +9,7 @@ namespace NutriTrack.Api.Endpoints;
 /// </summary>
 internal static class AiQuotaResponse
 {
-    public static IResult From(GeminiQuotaException ex, HttpResponse response)
+    public static IResult From(AiQuotaException ex, HttpResponse response)
     {
         // Retry-After gehoert laut HTTP zu jedem 429. Ganze Sekunden aufgerundet, damit ein
         // Client, der stumpf so lange wartet, nicht eine Zehntelsekunde zu frueh wiederkommt.
@@ -19,15 +19,17 @@ internal static class AiQuotaResponse
         return Results.Json(new { Error = Message(ex) }, statusCode: StatusCodes.Status429TooManyRequests);
     }
 
-    private static string Message(GeminiQuotaException ex) => ex.Scope switch
+    private static string Message(AiQuotaException ex) => ex.Scope switch
     {
-        GeminiQuotaScope.PerDay =>
+        AiQuotaScope.PerDay =>
             "Das KI-Tageskontingent ist aufgebraucht. Morgen geht es wieder — bis dahin kannst du von Hand eintragen.",
 
-        GeminiQuotaScope.PerMinute =>
+        AiQuotaScope.PerMinute =>
             $"Zu viele KI-Anfragen in kurzer Zeit. Versuche es {Gleich(ex.RetryAfter)} noch einmal.",
 
-        // Google nannte keine Grenze: dann darf hier auch nicht behauptet werden, welche es war.
+        // Der Anbieter nannte keine auswertbare Grenze: dann darf hier auch nicht behauptet
+        // werden, welche es war. Gilt fuer beide Anbieter - Google UND OpenRouter beantworten
+        // manche 429 ohne auswertbares Feld.
         _ => $"Die KI weist gerade weitere Anfragen ab. Versuche es {Gleich(ex.RetryAfter)} noch einmal.",
     };
 

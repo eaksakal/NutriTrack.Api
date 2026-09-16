@@ -5,15 +5,14 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using NutriTrack.Api.Contracts.Ai;
-using NutriTrack.Domain.Entities;
 
 namespace NutriTrack.Api.Services;
 
-/// <summary>Google ist erreichbar, aber nicht nutzbar (Timeout, Netz, 5xx).</summary>
-public class GeminiUnavailableException(string message, Exception? inner = null) : Exception(message, inner)
+/// <summary>Der Anbieter ist erreichbar, aber nicht nutzbar (Timeout, Netz, 5xx).</summary>
+public class AiUnavailableException(string message, Exception? inner = null) : Exception(message, inner)
 {
     /// <summary>
-    /// Der Grund in einem Satz, samt der tiefsten Ursache. Zeitdeckel, ein 500 von Google und ein
+    /// Der Grund in einem Satz, samt der tiefsten Ursache. Zeitdeckel, ein 500 vom Anbieter und ein
     /// abgelaufener Schluessel sehen von aussen gleich aus, verlangen aber verschiedene Reaktionen;
     /// wer das nicht erfaehrt, tippt sein Essen von Hand ein statt den Schluessel zu erneuern.
     /// </summary>
@@ -30,8 +29,8 @@ public class GeminiUnavailableException(string message, Exception? inner = null)
     }
 }
 
-/// <summary>Welche Grenze Google gerissen sah. Google beantwortet alle mit demselben 429.</summary>
-public enum GeminiQuotaScope
+/// <summary>Welche Grenze der Anbieter gerissen sah. Google beantwortet alle mit demselben 429.</summary>
+public enum AiQuotaScope
 {
     /// <summary>Der Rumpf nannte keine auswertbare Grenze.</summary>
     Unknown,
@@ -39,27 +38,29 @@ public enum GeminiQuotaScope
     /// <summary>Anfragen pro Minute — in Sekunden vorbei, kein Grund zur Aufregung.</summary>
     PerMinute,
 
-    /// <summary>Anfragen pro Tag — bis Mitternacht (Pazifik) ist Schluss.</summary>
+    /// <summary>Anfragen pro Tag — wann genau die Sperre faellt, ist anbieterabhaengig (Google:
+    /// Mitternacht Pazifik; OpenRouter nennt dazu keine Uhrzeit). In jedem Fall Stunden, nicht
+    /// Sekunden.</summary>
     PerDay,
 }
 
 /// <summary>Eine Mengengrenze wurde gerissen (429). <see cref="Scope"/> sagt welche.</summary>
-public class GeminiQuotaException(
+public class AiQuotaException(
     string message,
-    GeminiQuotaScope scope = GeminiQuotaScope.Unknown,
+    AiQuotaScope scope = AiQuotaScope.Unknown,
     TimeSpan? retryAfter = null) : Exception(message)
 {
-    public GeminiQuotaScope Scope { get; } = scope;
+    public AiQuotaScope Scope { get; } = scope;
 
-    /// <summary>Von Google genannte Wartezeit; null, wenn er keine nannte.</summary>
+    /// <summary>Vom Anbieter genannte Wartezeit; null, wenn er keine nannte.</summary>
     public TimeSpan? RetryAfter { get; } = retryAfter;
 }
 
 /// <summary>Antwort kam an, passt aber nicht zum erzwungenen Schema.</summary>
-public class GeminiMalformedResponseException(string message) : Exception(message);
+public class AiMalformedResponseException(string message) : Exception(message);
 
 /// <summary>Wie ein Zielwunsch in Worten zu lesen ist. Mehr braucht der Rechner nicht.</summary>
-public class GeminiWishResult
+public class AiWishResult
 {
     /// <summary>"lose", "hold" oder "gain".</summary>
     [JsonPropertyName("direction")]
@@ -78,13 +79,13 @@ public class GeminiWishResult
     public string Interpretation { get; set; } = string.Empty;
 }
 
-public class GeminiParseResult
+public class AiParseResult
 {
     public string? Question { get; set; }
-    public List<GeminiItem> Items { get; set; } = [];
+    public List<AiItem> Items { get; set; } = [];
 }
 
-public class GeminiItem
+public class AiItem
 {
     [JsonPropertyName("searchTerm")]
     public string SearchTerm { get; set; } = string.Empty;
@@ -115,13 +116,31 @@ public class GeminiItem
     public NutrientEstimate Estimate { get; set; } = new();
 }
 
+/// <summary>
+/// Ergebnis einer Handprobe: was wirklich zurueckkam, nicht was der Code daraus macht.
+///
+/// Auf Namespace-Ebene wie die anderen drei Ergebnistypen, nicht in GeminiService geschachtelt:
+/// alle vier sind dasselbe interne Ergebnisformat der KI-Erfassung, das beide Anbieter fuellen.
+/// Anfangs steckte er in der Klasse - ein Versehen beim Bau der Handprobe, kein Entwurf.
+///
+/// ThinkingLevel ist nullable: die Denkstufe ist eine Eigenheit von Gemini, OpenRouter kennt sie
+/// nicht. Null sagt das ehrlich; ein erfundener Platzhalter ("" oder "-") behauptete eine
+/// Einstellung, die es dort gar nicht gibt.
+/// </summary>
+public sealed record AiProbeResult(
+    int StatusCode, long DurationMs, string Model, string? ThinkingLevel, string RawBody);
+
 public class GeminiService(
     HttpClient httpClient,
     IConfiguration configuration,
     AiSettingsProvider settingsProvider,
     ILogger<GeminiService> logger,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider) : IAiProvider
 {
+    public string Name => IAiProvider.Gemini;
+
+    public string ApiKeySetting => "Gemini:ApiKey";
+
     private const string Endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions";
 
     // Die Interactions-API ist revisioniert. Ohne diesen Header liefert Google die jeweils
@@ -131,69 +150,6 @@ public class GeminiService(
     // Ueberraschung im Betrieb.
     private const string ApiRevision = "2026-05-20";
 
-    // Die Grenze zwischen Nachfragen und Annehmen entscheidet, ob das Feature im Alltag taugt:
-    // zu viele Rueckfragen sind laestiger als die bestehende Suche.
-    //
-    // Die Einheiten stehen hier AUSDRUECKLICH je Feld. Der Rest der Anwendung fuehrt Natrium in
-    // GRAMM je 100 g (OpenFoodFacts-Feld sodium_100g, siehe MealEndpoints.CalcMicro); ein
-    // Sprachmodell nennt Natrium von sich aus praktisch immer in Milligramm. Ohne diesen Satz
-    // landet der Wert um den Faktor 1000 zu hoch im Tagebuch.
-    private const string SystemInstruction = """
-        Du zerlegst deutschsprachige Beschreibungen von Mahlzeiten in einzelne Posten.
-        Fuer jeden Posten lieferst du: searchTerm (kurzer Suchbegriff fuer eine
-        Lebensmitteldatenbank, ohne Mengenangabe), label (lesbarer Name), quantityInGrams
-        (Menge in Gramm, Fluessigkeiten in Milliliter gleich Gramm), mealType (genau einer von
-        Breakfast, Lunch, Dinner, Snack), productKind und estimate (Naehrwerte je 100 g).
-
-        productKind entscheidet, woher die Naehrwerte am Ende kommen:
-          "branded"  Ein gekauftes, verpacktes Produkt, das der Nutzer benennbar gemacht hat -
-                     eine Marke ("Koelln Zarte Haferflocken", "Alpro Sojadrink"), ein
-                     Fertiggericht oder ein Barcode. Nur dann wird eine Produktdatenbank gefragt.
-          "generic"  Alles andere: ein Grundnahrungsmittel ohne Marke ("eine Banane", "Magerquark")
-                     und jedes selbst gekochte oder zubereitete Gericht ("Spaghetti Bolognese",
-                     "Linsensuppe", "Ruehrei"). Hier zaehlt DEIN Wert, nicht die Datenbank.
-        Im Zweifel "generic". Eine Produktdatenbank kennt fuer "Spaghetti" nur TROCKENE Nudeln
-        (etwa 360 kcal je 100 g); gekochte haben etwa 150. Ein falsches "branded" macht daraus
-        den doppelten Wert.
-
-        Zubereitungszustand gehoert in label UND in estimate: "Spaghetti (gekocht)" mit etwa
-        150 kcal je 100 g, nicht der Trockenwert. Dasselbe gilt fuer Reis, Nudeln und
-        Huelsenfruechte.
-        Die Einheiten in estimate sind bindend und beziehen sich IMMER auf 100 g des
-        Lebensmittels:
-          calories       Kilokalorien (kcal) je 100 g
-          protein        Gramm je 100 g
-          carbohydrates  Gramm je 100 g
-          fat            Gramm je 100 g
-          fiber          Gramm je 100 g
-          sugar          Gramm je 100 g
-          saturatedFat   Gramm je 100 g
-          sodium         GRAMM je 100 g, NICHT Milligramm. Ein Broetchen hat etwa 0.45,
-                         nicht 450. Teile einen in Milligramm gedachten Wert durch 1000.
-        Rechne Haushaltsmasse um: eine Scheibe Kaese etwa 30 g, eine Tasse Kaffee etwa 200 ml,
-        ein Broetchen etwa 60 g.
-        Fehlt eine Angabe, die den Naehrwert deutlich veraendert, stelle GENAU EINE kurze
-        Rueckfrage im Feld question und lasse items leer. Bei Kleinigkeiten nimm den ueblichen
-        Wert an, statt nachzufragen.
-        Ausdruecklich nachfragen musst du bei unbestimmten Mengenangaben zu einer vollstaendigen
-        Mahlzeit - "grosse Portion", "eine Schuessel", "ein Teller", "viel", "wenig". Bei diesen
-        Formulierungen liegen zwischen zwei plausiblen Annahmen leicht 300 kcal, und das ist die
-        groesste Fehlerquelle ueberhaupt. Eine Zahl zu raten, die der Nutzer in zwei Sekunden
-        haette nennen koennen, ist der schlechtere Weg.
-        Nenne in der Rueckfrage ruhig eine Groessenordnung zur Auswahl, damit sie leicht zu
-        beantworten ist.
-        Steht ueber dem Gespraech ein Abschnitt "Bisher gegessen", dann ist das der Verlauf der
-        letzten Tage, jede Zeile mit einer Kennung in eckigen Klammern. Bezieht sich der Nutzer auf
-        eine dieser Zeilen ("das Eis von gestern", "nochmal das Fruehstueck", "den Rest davon"),
-        setze sourceRef auf ihre Kennung, zum Beispiel "v2". Die Naehrwerte sind dann bereits
-        bekannt und dein estimate wird verworfen - fuelle es trotzdem, das Schema verlangt es.
-        quantityInGrams gilt weiterhin und ist deine Aufgabe: "die andere Haelfte" und "nochmal
-        dasselbe" meinen die Menge aus der Zeile, "die Haelfte davon" die halbe.
-        Ohne erkennbaren Bezug laesst du sourceRef weg und verfaehrst wie bisher. Erfinde NIE eine
-        Kennung, die nicht im Abschnitt steht.
-        Antworte ausschliesslich im vorgegebenen Schema.
-        """;
-
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     /// <summary>
@@ -201,13 +157,13 @@ public class GeminiService(
     /// - anders als Mengengrenze und Schemabruch - gar nicht protokolliert: der Grund verschwand
     /// zwischen Wurf und Endpunkt, und im Log stand nichts. Wer wirft, schreibt es also auch auf.
     /// </summary>
-    private GeminiUnavailableException Unavailable(string grund, Exception? ursache = null)
+    private AiUnavailableException Unavailable(string grund, Exception? ursache = null)
     {
         logger.LogWarning(ursache, "Gemini nicht nutzbar: {Grund}", grund);
-        return new GeminiUnavailableException(grund, ursache);
+        return new AiUnavailableException(grund, ursache);
     }
 
-    public async Task<GeminiParseResult> ParseAsync(
+    public async Task<AiParseResult> ParseAsync(
         IReadOnlyList<ChatMessage> messages, string historyBlock, CancellationToken ct)
     {
         var apiKey = configuration["Gemini:ApiKey"];
@@ -228,13 +184,13 @@ public class GeminiService(
         foreach (var message in messages)
             transcript.AppendLine($"{(message.Role == "assistant" ? "Rueckfrage" : "Nutzer")}: {message.Text}");
 
-        var inner = await SendAsync(SystemInstruction, transcript.ToString(), ResponseSchema, ct);
+        var inner = await SendAsync(AiInstructions.SystemInstruction, transcript.ToString(), ResponseSchema, ct);
 
-        GeminiParseResult result;
+        AiParseResult result;
         try
         {
-            result = JsonSerializer.Deserialize<GeminiParseResult>(inner, JsonOptions)
-                     ?? throw new GeminiMalformedResponseException("Leere Antwort.");
+            result = JsonSerializer.Deserialize<AiParseResult>(inner, JsonOptions)
+                     ?? throw new AiMalformedResponseException("Leere Antwort.");
         }
         catch (JsonException ex)
         {
@@ -244,12 +200,12 @@ public class GeminiService(
             // nennt darin Pfad und Position ("Path: $.items[0].estimate.sugar | LineNumber: ..."),
             // NIE den gelesenen Wert (belegt in AiFailureLogTests). Genau dieser Pfad haette die
             // Ziffernschleife vom 2026-09-15 in Sekunden statt Stunden verraten.
-            throw new GeminiMalformedResponseException($"Antwort passt nicht zum Schema: {ex.Message}");
+            throw new AiMalformedResponseException($"Antwort passt nicht zum Schema: {ex.Message}");
         }
 
         foreach (var item in result.Items)
         {
-            item.MealType = NormalizeMealType(item.MealType);
+            item.MealType = AiInstructions.NormalizeMealType(item.MealType);
             // Unbekanntes wird "generic": lieber der eigene Standardwert als ein zufaelliges
             // Markenprodukt aus der Datenbank. Der Fehler faellt dann kleiner aus.
             item.ProductKind = item.ProductKind?.Trim().ToLowerInvariant() == "branded" ? "branded" : "generic";
@@ -257,54 +213,11 @@ public class GeminiService(
             // optionalen Feld gern "" statt es wegzulassen, und ein leerer Schluessel wuerde im
             // Woerterbuch spaeter als sinnlose Suche auflaufen.
             item.SourceRef = string.IsNullOrWhiteSpace(item.SourceRef) ? null : item.SourceRef.Trim();
-            NormalizeEstimate(item, logger);
+            AiInstructions.NormalizeEstimate(item, logger);
         }
 
         return result;
     }
-
-    /// <summary>
-    /// Letzte Notbremse gegen unmoegliche Schaetzwerte, bevor sie ueber die API in die Datenbank
-    /// wandern. Der eigentliche Vertrag steht in <see cref="SystemInstruction"/> und im Schema;
-    /// dies faengt nur ab, was physikalisch nicht sein kann — denn korrigieren laesst sich ein
-    /// falscher Naehrwert spaeter nicht mehr: PUT /api/meals/{id} aendert nur Menge, Mahlzeit und
-    /// Zeit, und ueber FindReusableFoodItemAsync entstuende ein globaler FoodItem mit dem Unsinn.
-    /// Bewusst nur die unmoeglichen Bereiche: ein Wert, der bloss ungewoehnlich ist, bleibt stehen.
-    /// </summary>
-    private static void NormalizeEstimate(GeminiItem item, ILogger logger)
-    {
-        var estimate = item.Estimate;
-
-        // Reines Fett hat rund 900 kcal je 100 g; mehr kann kein Lebensmittel haben.
-        estimate.Calories = Clamp(estimate.Calories, 900m);
-
-        // Ein Naehrstoff kann nicht mehr als 100 g je 100 g ausmachen.
-        estimate.Protein = Clamp(estimate.Protein, 100m);
-        estimate.Carbohydrates = Clamp(estimate.Carbohydrates, 100m);
-        estimate.Fat = Clamp(estimate.Fat, 100m);
-        estimate.Fiber = Clamp(estimate.Fiber, 100m);
-        estimate.Sugar = Clamp(estimate.Sugar, 100m);
-        estimate.SaturatedFat = Clamp(estimate.SaturatedFat, 100m);
-
-        // Natrium fuehrt die Anwendung in GRAMM je 100 g. Selbst reines Kochsalz kommt auf nur
-        // rund 39 g Natrium je 100 g — alles darueber ist mit Sicherheit ein in Milligramm
-        // gedachter Wert (das Modell neigt trotz Anweisung dazu). Faktor 1000 statt Kappen:
-        // Kappen machte aus 450 mg glaubwuerdige 40 g und damit einen unauffaelligen Unsinn.
-        const decimal maxSodiumGramsPer100g = 40m;
-        if (estimate.Sodium > maxSodiumGramsPer100g)
-        {
-            logger.LogWarning(
-                "Natrium-Schaetzung {Value} je 100 g fuer {Label} ist als Gramm unmoeglich; " +
-                "als Milligramm gewertet und durch 1000 geteilt.", estimate.Sodium, item.Label);
-            estimate.Sodium /= 1000m;
-        }
-
-        estimate.Sodium = Clamp(estimate.Sodium, maxSodiumGramsPer100g);
-    }
-
-    private static decimal Clamp(decimal value, decimal max) => value < 0 ? 0m : Math.Min(value, max);
-
-    private static decimal? Clamp(decimal? value, decimal max) => value is null ? null : Clamp(value.Value, max);
 
     /// <summary>
     /// Schaelt den JSON-Text aus Googles Antwortumschlag.
@@ -328,7 +241,7 @@ public class GeminiService(
         }
         catch (JsonException)
         {
-            throw new GeminiMalformedResponseException("Antwort von Gemini ist kein JSON.");
+            throw new AiMalformedResponseException("Antwort von Gemini ist kein JSON.");
         }
 
         using (document)
@@ -351,7 +264,7 @@ public class GeminiService(
                 }
             }
 
-            throw new GeminiMalformedResponseException(
+            throw new AiMalformedResponseException(
                 "Unerwarteter Antwortumschlag; erwartet wurde steps[].content[].text " +
                 $"(oder output_text). Tatsaechlich empfangen: {DescribeRoot(root)}");
         }
@@ -433,7 +346,7 @@ public class GeminiService(
     /// Ins Log gehen nur die ausgelesenen Felder, nie der Rumpf: was Google in eine Fehlermeldung
     /// schreibt, ist nicht unsere Entscheidung, und der Text der Mahlzeit hat im Log nichts verloren.
     /// </summary>
-    private async Task<GeminiQuotaException> ReadQuotaFailureAsync(HttpResponseMessage response, CancellationToken ct)
+    private async Task<AiQuotaException> ReadQuotaFailureAsync(HttpResponseMessage response, CancellationToken ct)
     {
         string? quotaId = null;
         TimeSpan? retryAfter = null;
@@ -512,9 +425,9 @@ public class GeminiService(
 
         var scope = normalisiert switch
         {
-            not null when normalisiert.Contains("PerDay", StringComparison.OrdinalIgnoreCase) => GeminiQuotaScope.PerDay,
-            not null when normalisiert.Contains("PerMinute", StringComparison.OrdinalIgnoreCase) => GeminiQuotaScope.PerMinute,
-            _ => GeminiQuotaScope.Unknown,
+            not null when normalisiert.Contains("PerDay", StringComparison.OrdinalIgnoreCase) => AiQuotaScope.PerDay,
+            not null when normalisiert.Contains("PerMinute", StringComparison.OrdinalIgnoreCase) => AiQuotaScope.PerMinute,
+            _ => AiQuotaScope.Unknown,
         };
 
         logger.LogWarning(
@@ -523,7 +436,7 @@ public class GeminiService(
             scope,
             retryAfter?.ToString() ?? "keine");
 
-        return new GeminiQuotaException($"Mengengrenze gerissen ({scope}).", scope, retryAfter);
+        return new AiQuotaException($"Mengengrenze gerissen ({scope}).", scope, retryAfter);
     }
 
     /// <summary>"* Quota exceeded for metric: <c>&lt;name&gt;</c>, limit: 20, model: ..."</summary>
@@ -549,23 +462,6 @@ public class GeminiService(
             : null;
     }
 
-    private const string WishInstruction = """
-        Du liest aus einem deutschsprachigen Satz heraus, welches Ernaehrungsziel jemand verfolgt.
-        Du rechnest NICHTS aus - Kalorien und Makros bestimmt eine Formel, nicht du.
-        Liefere:
-          direction         "lose" (abnehmen), "hold" (Gewicht halten) oder "gain" (aufbauen)
-          intensityPercent  gewuenschte Abweichung vom Erhaltungsbedarf in Prozent, falls der Satz
-                            eine Geschwindigkeit nennt ("langsam" etwa 10, "zuegig" etwa 25,
-                            ohne Angabe: weglassen)
-          style             "lowCarb" bei ausdruecklichem Wunsch nach wenig Kohlenhydraten,
-                            "highProtein" bei Muskelaufbau oder ausdruecklichem Proteinwunsch,
-                            sonst "balanced"
-          interpretation    EIN kurzer deutscher Satz, wie du den Wunsch verstanden hast. Der
-                            Nutzer liest ihn zur Gegenkontrolle, bevor die Ziele uebernommen
-                            werden - schreibe ihn so, dass ein Missverstaendnis auffaellt.
-        Ist kein Ziel erkennbar, nimm "hold" und sage das in interpretation.
-        """;
-
     private static object WishSchema => new
     {
         type = "object",
@@ -584,14 +480,14 @@ public class GeminiService(
     /// keine Koerperdaten. Das ist der Kern der Abmachung mit dem Nutzer: Google erfaehrt, dass
     /// jemand abnehmen will, aber nicht, wer wie viel wiegt.
     /// </summary>
-    public async Task<GeminiWishResult> ParseWishAsync(string wish, CancellationToken ct)
+    public async Task<AiWishResult> ParseWishAsync(string wish, CancellationToken ct)
     {
-        var inner = await SendAsync(WishInstruction, $"Nutzer: {wish}", WishSchema, ct);
+        var inner = await SendAsync(AiInstructions.WishInstruction, $"Nutzer: {wish}", WishSchema, ct);
 
         try
         {
-            var ergebnis = JsonSerializer.Deserialize<GeminiWishResult>(inner, JsonOptions)
-                           ?? throw new GeminiMalformedResponseException("Leere Antwort.");
+            var ergebnis = JsonSerializer.Deserialize<AiWishResult>(inner, JsonOptions)
+                           ?? throw new AiMalformedResponseException("Leere Antwort.");
 
             ergebnis.Direction = ergebnis.Direction?.Trim().ToLowerInvariant() switch
             {
@@ -615,37 +511,8 @@ public class GeminiService(
 
             // Dieselbe Begruendung wie in ParseAsync: ex.Message nennt nur Pfad und Position,
             // nie den Wert, und ist damit sicher fuers Protokoll.
-            throw new GeminiMalformedResponseException($"Antwort passt nicht zum Schema: {ex.Message}");
+            throw new AiMalformedResponseException($"Antwort passt nicht zum Schema: {ex.Message}");
         }
-    }
-
-    /// <summary>
-    /// Bringt den Mahlzeitentyp auf einen der vier Enum-Werte.
-    ///
-    /// Zweiter Riegel hinter dem enum im Antwortschema: das Schema ist Googles Zusage, diese
-    /// Methode die Absicherung dagegen, dass die Zusage bricht. Bei der Handprobe am 2026-09-12
-    /// kam "Frühstück" zurueck — unser Prompt ist deutsch, also antwortet das Modell deutsch.
-    /// Ohne Umsetzung lehnt MealEndpoints den Eintrag spaeter mit 400 ab, und der Nutzer haette
-    /// eine Bestaetigungsmaske vor sich, die sich nicht uebernehmen laesst.
-    ///
-    /// Unbekanntes wird zu Snack statt zu einem Fehler: der Typ ist in der Maske ohnehin
-    /// aenderbar, und eine ganze Mahlzeit an einer Vokabel scheitern zu lassen waere
-    /// unverhaeltnismaessig.
-    /// </summary>
-    public static string NormalizeMealType(string? mealType)
-    {
-        var wert = (mealType ?? string.Empty).Trim();
-
-        if (Enum.TryParse<MealType>(wert, ignoreCase: true, out var treffer) && Enum.IsDefined(treffer))
-            return treffer.ToString();
-
-        return wert.ToLowerInvariant() switch
-        {
-            "frühstück" or "fruehstueck" or "fruhstuck" or "morgens" or "breakfast" => "Breakfast",
-            "mittagessen" or "mittag" or "mittags" or "lunch" => "Lunch",
-            "abendessen" or "abendbrot" or "abend" or "abends" or "dinner" => "Dinner",
-            _ => "Snack",
-        };
     }
 
     private static string? TextFromSteps(JsonElement steps)
@@ -691,12 +558,6 @@ public class GeminiService(
             : $"Wurzelelement vom Typ {root.ValueKind}";
 
     /// <summary>
-    /// Ergebnis einer Handprobe: was wirklich zurueckkam, nicht was der Code daraus macht.
-    /// </summary>
-    public sealed record GeminiProbeResult(
-        int StatusCode, long DurationMs, string Model, string ThinkingLevel, string RawBody);
-
-    /// <summary>
     /// EIN Aufruf mit den geltenden Einstellungen und einer FESTEN Beispieleingabe, dessen
     /// Rohantwort zurueckkommt.
     ///
@@ -708,7 +569,7 @@ public class GeminiService(
     /// was der Betreiber hier sehen will - eine Ausnahme wuerde die Diagnose verstecken, um deren
     /// willen es diese Methode gibt.
     /// </summary>
-    public async Task<GeminiProbeResult> ProbeAsync(CancellationToken ct)
+    public async Task<AiProbeResult> ProbeAsync(CancellationToken ct)
     {
         var apiKey = configuration["Gemini:ApiKey"];
         if (string.IsNullOrWhiteSpace(apiKey))
@@ -721,7 +582,7 @@ public class GeminiService(
         {
             model = einstellungen.Model,
             input = "Nutzer: zwei Broetchen mit Gouda\n",
-            system_instruction = SystemInstruction,
+            system_instruction = AiInstructions.SystemInstruction,
             response_format = new
             {
                 type = "text",
@@ -766,7 +627,7 @@ public class GeminiService(
         if (rumpf.Length > 2000)
             rumpf = rumpf[..2000] + "\n… (gekürzt)";
 
-        return new GeminiProbeResult(status, dauer, einstellungen.Model, einstellungen.ThinkingLevel, rumpf);
+        return new AiProbeResult(status, dauer, einstellungen.Model, einstellungen.ThinkingLevel, rumpf);
     }
 
     private static object ResponseSchema => new

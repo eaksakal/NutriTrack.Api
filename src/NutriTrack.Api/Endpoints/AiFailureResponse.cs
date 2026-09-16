@@ -15,7 +15,7 @@ internal static class AiFailureResponse
 
     private static string Detail(Exception ex) => ex switch
     {
-        GeminiUnavailableException unavailable => unavailable.Detail,
+        AiUnavailableException unavailable => unavailable.Detail,
         _ => ex.Message,
     };
 }
