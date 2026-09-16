@@ -104,12 +104,12 @@ public static class GoalsEndpoints
                     intensitaet = gedeutet.IntensityPercent;
                     deutung = gedeutet.Interpretation;
                 }
-                catch (GeminiQuotaException ex)
+                catch (AiQuotaException ex)
                 {
                     await recorder.RecordAsync("Quota", ex.Message, uhr.ElapsedMilliseconds, 429);
                     return AiQuotaResponse.From(ex, httpResponse);
                 }
-                catch (GeminiMalformedResponseException ex)
+                catch (AiMalformedResponseException ex)
                 {
                     await recorder.RecordAsync("Schema", ex.Message, uhr.ElapsedMilliseconds, null);
                     return AiFailureResponse.From(
@@ -117,7 +117,7 @@ public static class GoalsEndpoints
                         "Die KI ist gerade nicht erreichbar. Du kannst die Ziele von Hand eintragen.",
                         StatusCodes.Status503ServiceUnavailable);
                 }
-                catch (GeminiUnavailableException ex)
+                catch (AiUnavailableException ex)
                 {
                     // Dieselbe Unterscheidung wie in AiEndpoints: der Typ der inneren Ausnahme
                     // entscheidet ueber Timeout vs. Unavailable, nie ein Wortabgleich auf

@@ -9,11 +9,11 @@ using NutriTrack.Domain.Entities;
 
 namespace NutriTrack.Api.Services;
 
-/// <summary>Google ist erreichbar, aber nicht nutzbar (Timeout, Netz, 5xx).</summary>
-public class GeminiUnavailableException(string message, Exception? inner = null) : Exception(message, inner)
+/// <summary>Der Anbieter ist erreichbar, aber nicht nutzbar (Timeout, Netz, 5xx).</summary>
+public class AiUnavailableException(string message, Exception? inner = null) : Exception(message, inner)
 {
     /// <summary>
-    /// Der Grund in einem Satz, samt der tiefsten Ursache. Zeitdeckel, ein 500 von Google und ein
+    /// Der Grund in einem Satz, samt der tiefsten Ursache. Zeitdeckel, ein 500 vom Anbieter und ein
     /// abgelaufener Schluessel sehen von aussen gleich aus, verlangen aber verschiedene Reaktionen;
     /// wer das nicht erfaehrt, tippt sein Essen von Hand ein statt den Schluessel zu erneuern.
     /// </summary>
@@ -30,8 +30,8 @@ public class GeminiUnavailableException(string message, Exception? inner = null)
     }
 }
 
-/// <summary>Welche Grenze Google gerissen sah. Google beantwortet alle mit demselben 429.</summary>
-public enum GeminiQuotaScope
+/// <summary>Welche Grenze der Anbieter gerissen sah. Google beantwortet alle mit demselben 429.</summary>
+public enum AiQuotaScope
 {
     /// <summary>Der Rumpf nannte keine auswertbare Grenze.</summary>
     Unknown,
@@ -44,22 +44,22 @@ public enum GeminiQuotaScope
 }
 
 /// <summary>Eine Mengengrenze wurde gerissen (429). <see cref="Scope"/> sagt welche.</summary>
-public class GeminiQuotaException(
+public class AiQuotaException(
     string message,
-    GeminiQuotaScope scope = GeminiQuotaScope.Unknown,
+    AiQuotaScope scope = AiQuotaScope.Unknown,
     TimeSpan? retryAfter = null) : Exception(message)
 {
-    public GeminiQuotaScope Scope { get; } = scope;
+    public AiQuotaScope Scope { get; } = scope;
 
-    /// <summary>Von Google genannte Wartezeit; null, wenn er keine nannte.</summary>
+    /// <summary>Vom Anbieter genannte Wartezeit; null, wenn er keine nannte.</summary>
     public TimeSpan? RetryAfter { get; } = retryAfter;
 }
 
 /// <summary>Antwort kam an, passt aber nicht zum erzwungenen Schema.</summary>
-public class GeminiMalformedResponseException(string message) : Exception(message);
+public class AiMalformedResponseException(string message) : Exception(message);
 
 /// <summary>Wie ein Zielwunsch in Worten zu lesen ist. Mehr braucht der Rechner nicht.</summary>
-public class GeminiWishResult
+public class AiWishResult
 {
     /// <summary>"lose", "hold" oder "gain".</summary>
     [JsonPropertyName("direction")]
@@ -78,13 +78,13 @@ public class GeminiWishResult
     public string Interpretation { get; set; } = string.Empty;
 }
 
-public class GeminiParseResult
+public class AiParseResult
 {
     public string? Question { get; set; }
-    public List<GeminiItem> Items { get; set; } = [];
+    public List<AiItem> Items { get; set; } = [];
 }
 
-public class GeminiItem
+public class AiItem
 {
     [JsonPropertyName("searchTerm")]
     public string SearchTerm { get; set; } = string.Empty;
@@ -201,13 +201,13 @@ public class GeminiService(
     /// - anders als Mengengrenze und Schemabruch - gar nicht protokolliert: der Grund verschwand
     /// zwischen Wurf und Endpunkt, und im Log stand nichts. Wer wirft, schreibt es also auch auf.
     /// </summary>
-    private GeminiUnavailableException Unavailable(string grund, Exception? ursache = null)
+    private AiUnavailableException Unavailable(string grund, Exception? ursache = null)
     {
         logger.LogWarning(ursache, "Gemini nicht nutzbar: {Grund}", grund);
-        return new GeminiUnavailableException(grund, ursache);
+        return new AiUnavailableException(grund, ursache);
     }
 
-    public async Task<GeminiParseResult> ParseAsync(
+    public async Task<AiParseResult> ParseAsync(
         IReadOnlyList<ChatMessage> messages, string historyBlock, CancellationToken ct)
     {
         var apiKey = configuration["Gemini:ApiKey"];
@@ -230,11 +230,11 @@ public class GeminiService(
 
         var inner = await SendAsync(SystemInstruction, transcript.ToString(), ResponseSchema, ct);
 
-        GeminiParseResult result;
+        AiParseResult result;
         try
         {
-            result = JsonSerializer.Deserialize<GeminiParseResult>(inner, JsonOptions)
-                     ?? throw new GeminiMalformedResponseException("Leere Antwort.");
+            result = JsonSerializer.Deserialize<AiParseResult>(inner, JsonOptions)
+                     ?? throw new AiMalformedResponseException("Leere Antwort.");
         }
         catch (JsonException ex)
         {
@@ -244,7 +244,7 @@ public class GeminiService(
             // nennt darin Pfad und Position ("Path: $.items[0].estimate.sugar | LineNumber: ..."),
             // NIE den gelesenen Wert (belegt in AiFailureLogTests). Genau dieser Pfad haette die
             // Ziffernschleife vom 2026-09-15 in Sekunden statt Stunden verraten.
-            throw new GeminiMalformedResponseException($"Antwort passt nicht zum Schema: {ex.Message}");
+            throw new AiMalformedResponseException($"Antwort passt nicht zum Schema: {ex.Message}");
         }
 
         foreach (var item in result.Items)
@@ -271,7 +271,7 @@ public class GeminiService(
     /// Zeit, und ueber FindReusableFoodItemAsync entstuende ein globaler FoodItem mit dem Unsinn.
     /// Bewusst nur die unmoeglichen Bereiche: ein Wert, der bloss ungewoehnlich ist, bleibt stehen.
     /// </summary>
-    private static void NormalizeEstimate(GeminiItem item, ILogger logger)
+    private static void NormalizeEstimate(AiItem item, ILogger logger)
     {
         var estimate = item.Estimate;
 
@@ -328,7 +328,7 @@ public class GeminiService(
         }
         catch (JsonException)
         {
-            throw new GeminiMalformedResponseException("Antwort von Gemini ist kein JSON.");
+            throw new AiMalformedResponseException("Antwort von Gemini ist kein JSON.");
         }
 
         using (document)
@@ -351,7 +351,7 @@ public class GeminiService(
                 }
             }
 
-            throw new GeminiMalformedResponseException(
+            throw new AiMalformedResponseException(
                 "Unerwarteter Antwortumschlag; erwartet wurde steps[].content[].text " +
                 $"(oder output_text). Tatsaechlich empfangen: {DescribeRoot(root)}");
         }
@@ -433,7 +433,7 @@ public class GeminiService(
     /// Ins Log gehen nur die ausgelesenen Felder, nie der Rumpf: was Google in eine Fehlermeldung
     /// schreibt, ist nicht unsere Entscheidung, und der Text der Mahlzeit hat im Log nichts verloren.
     /// </summary>
-    private async Task<GeminiQuotaException> ReadQuotaFailureAsync(HttpResponseMessage response, CancellationToken ct)
+    private async Task<AiQuotaException> ReadQuotaFailureAsync(HttpResponseMessage response, CancellationToken ct)
     {
         string? quotaId = null;
         TimeSpan? retryAfter = null;
@@ -512,9 +512,9 @@ public class GeminiService(
 
         var scope = normalisiert switch
         {
-            not null when normalisiert.Contains("PerDay", StringComparison.OrdinalIgnoreCase) => GeminiQuotaScope.PerDay,
-            not null when normalisiert.Contains("PerMinute", StringComparison.OrdinalIgnoreCase) => GeminiQuotaScope.PerMinute,
-            _ => GeminiQuotaScope.Unknown,
+            not null when normalisiert.Contains("PerDay", StringComparison.OrdinalIgnoreCase) => AiQuotaScope.PerDay,
+            not null when normalisiert.Contains("PerMinute", StringComparison.OrdinalIgnoreCase) => AiQuotaScope.PerMinute,
+            _ => AiQuotaScope.Unknown,
         };
 
         logger.LogWarning(
@@ -523,7 +523,7 @@ public class GeminiService(
             scope,
             retryAfter?.ToString() ?? "keine");
 
-        return new GeminiQuotaException($"Mengengrenze gerissen ({scope}).", scope, retryAfter);
+        return new AiQuotaException($"Mengengrenze gerissen ({scope}).", scope, retryAfter);
     }
 
     /// <summary>"* Quota exceeded for metric: <c>&lt;name&gt;</c>, limit: 20, model: ..."</summary>
@@ -584,14 +584,14 @@ public class GeminiService(
     /// keine Koerperdaten. Das ist der Kern der Abmachung mit dem Nutzer: Google erfaehrt, dass
     /// jemand abnehmen will, aber nicht, wer wie viel wiegt.
     /// </summary>
-    public async Task<GeminiWishResult> ParseWishAsync(string wish, CancellationToken ct)
+    public async Task<AiWishResult> ParseWishAsync(string wish, CancellationToken ct)
     {
         var inner = await SendAsync(WishInstruction, $"Nutzer: {wish}", WishSchema, ct);
 
         try
         {
-            var ergebnis = JsonSerializer.Deserialize<GeminiWishResult>(inner, JsonOptions)
-                           ?? throw new GeminiMalformedResponseException("Leere Antwort.");
+            var ergebnis = JsonSerializer.Deserialize<AiWishResult>(inner, JsonOptions)
+                           ?? throw new AiMalformedResponseException("Leere Antwort.");
 
             ergebnis.Direction = ergebnis.Direction?.Trim().ToLowerInvariant() switch
             {
@@ -615,7 +615,7 @@ public class GeminiService(
 
             // Dieselbe Begruendung wie in ParseAsync: ex.Message nennt nur Pfad und Position,
             // nie den Wert, und ist damit sicher fuers Protokoll.
-            throw new GeminiMalformedResponseException($"Antwort passt nicht zum Schema: {ex.Message}");
+            throw new AiMalformedResponseException($"Antwort passt nicht zum Schema: {ex.Message}");
         }
     }
 
@@ -693,7 +693,7 @@ public class GeminiService(
     /// <summary>
     /// Ergebnis einer Handprobe: was wirklich zurueckkam, nicht was der Code daraus macht.
     /// </summary>
-    public sealed record GeminiProbeResult(
+    public sealed record AiProbeResult(
         int StatusCode, long DurationMs, string Model, string ThinkingLevel, string RawBody);
 
     /// <summary>
@@ -708,7 +708,7 @@ public class GeminiService(
     /// was der Betreiber hier sehen will - eine Ausnahme wuerde die Diagnose verstecken, um deren
     /// willen es diese Methode gibt.
     /// </summary>
-    public async Task<GeminiProbeResult> ProbeAsync(CancellationToken ct)
+    public async Task<AiProbeResult> ProbeAsync(CancellationToken ct)
     {
         var apiKey = configuration["Gemini:ApiKey"];
         if (string.IsNullOrWhiteSpace(apiKey))
@@ -766,7 +766,7 @@ public class GeminiService(
         if (rumpf.Length > 2000)
             rumpf = rumpf[..2000] + "\n… (gekürzt)";
 
-        return new GeminiProbeResult(status, dauer, einstellungen.Model, einstellungen.ThinkingLevel, rumpf);
+        return new AiProbeResult(status, dauer, einstellungen.Model, einstellungen.ThinkingLevel, rumpf);
     }
 
     private static object ResponseSchema => new

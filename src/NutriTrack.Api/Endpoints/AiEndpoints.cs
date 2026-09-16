@@ -50,12 +50,12 @@ public static class AiEndpoints
                 var result = await assistant.ParseAsync(request.Messages, userId, ct);
                 return Results.Ok(result);
             }
-            catch (GeminiQuotaException ex)
+            catch (AiQuotaException ex)
             {
                 await recorder.RecordAsync("Quota", ex.Message, uhr.ElapsedMilliseconds, 429);
                 return AiQuotaResponse.From(ex, httpResponse);
             }
-            catch (GeminiMalformedResponseException ex)
+            catch (AiMalformedResponseException ex)
             {
                 await recorder.RecordAsync("Schema", ex.Message, uhr.ElapsedMilliseconds, null);
 
@@ -66,7 +66,7 @@ public static class AiEndpoints
                     "Die KI hat unverständlich geantwortet. Formuliere es bitte anders.",
                     StatusCodes.Status502BadGateway);
             }
-            catch (GeminiUnavailableException ex)
+            catch (AiUnavailableException ex)
             {
                 // Zeitdeckel und Netzausfall sehen von aussen gleich aus, verlangen aber
                 // Verschiedenes: der eine ist eine Frage der Einstellung, der andere nicht. Ein

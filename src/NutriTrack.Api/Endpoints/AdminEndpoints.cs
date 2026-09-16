@@ -70,7 +70,7 @@ public static class AdminEndpoints
 
             // Fehlender Schluessel ist die wahrscheinlichste Fehlkonfiguration ueberhaupt, und
             // ausgerechnet dafuer sagte die Probe bisher nichts Brauchbares: ohne diese Pruefung
-            // wirft GeminiService.ProbeAsync eine GeminiUnavailableException, die hier ungefangen
+            // wirft GeminiService.ProbeAsync eine AiUnavailableException, die hier ungefangen
             // durchschlaegt - dieses Projekt hat weder UseExceptionHandler noch AddProblemDetails,
             // also kommt ein 500 ohne Rumpf heraus. Vor der Bremse und nicht danach: ein Aufruf,
             // der ohnehin nicht klappen kann, soll keinen Platz aus dem Kontingentzaehler

@@ -145,7 +145,7 @@ public class AdminEndpointTests
 
     /// <summary>
     /// Der Blocker aus dem Branch-Review: fehlt der Schluessel, wirft GeminiService.ProbeAsync
-    /// eine GeminiUnavailableException. Ohne die vorab-Pruefung schluege das ungefangen durch -
+    /// eine AiUnavailableException. Ohne die vorab-Pruefung schluege das ungefangen durch -
     /// dieses Projekt hat weder UseExceptionHandler noch AddProblemDetails - und die Oberflaeche
     /// saehe nur "Verbindungstest fehlgeschlagen. (HTTP 500)". Ein fehlender Schluessel ist die
     /// wahrscheinlichste Fehlkonfiguration ueberhaupt; ausgerechnet dafuer muss das Werkzeug, das

@@ -44,12 +44,12 @@ public class AiMealAssistant(
     {
         var history = await LoadHistoryAsync(userId, ct);
 
-        GeminiParseResult parsed;
+        AiParseResult parsed;
         try
         {
             parsed = await gemini.ParseAsync(messages, history.Text, ct);
         }
-        catch (GeminiMalformedResponseException)
+        catch (AiMalformedResponseException)
         {
             // Genau ein zweiter Anlauf: Modelle straucheln gelegentlich einmalig am Schema.
             // Mehr Versuche kosten Kontingent und Wartezeit, ohne die Trefferquote zu heben.
@@ -96,7 +96,7 @@ public class AiMealAssistant(
         // Tageswert still verdoppelt.
         // Erst aufloesen, dann suchen: ein Posten mit Bezug hat seine Werte schon und darf weder
         // Suchbudget noch das Minutenkontingent von OpenFoodFacts verbrauchen.
-        var resolved = new Dictionary<GeminiItem, (MealEntry Entry, string Hint)>();
+        var resolved = new Dictionary<AiItem, (MealEntry Entry, string Hint)>();
         foreach (var item in items)
         {
             if (item.SourceRef is null)
@@ -236,10 +236,10 @@ public class AiMealAssistant(
         return response;
     }
 
-    private static bool IstMarkenprodukt(GeminiItem item) =>
+    private static bool IstMarkenprodukt(AiItem item) =>
         string.Equals(item.ProductKind, "branded", StringComparison.OrdinalIgnoreCase);
 
-    private static string NormalizeTerm(GeminiItem item) => NormalizeTerm(item.SearchTerm);
+    private static string NormalizeTerm(AiItem item) => NormalizeTerm(item.SearchTerm);
 
     private static string NormalizeTerm(string? searchTerm) => (searchTerm ?? string.Empty).Trim();
 

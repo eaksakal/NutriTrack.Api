@@ -61,7 +61,7 @@ public class AiFailureLogTests(NutriTrackApiFactory factory) : IClassFixture<Nut
         // Ausnahmetyp bewusst auseinander und wird nur unter der neuen, typbasierten
         // Unterscheidung richtig als "Unavailable" verbucht - unter der alten waere er faelschlich
         // "Timeout" (ex.Detail haengt die Meldung der tiefsten inneren Ausnahme an, siehe
-        // GeminiUnavailableException.Detail, der Text schlaegt also durch).
+        // AiUnavailableException.Detail, der Text schlaegt also durch).
         factory.GeminiResponder = _ => throw new HttpRequestException("Verbindung nicht rechtzeitig aufgebaut.");
 
         await client.PostAsJsonAsync("/api/ai/parse-meal", new
