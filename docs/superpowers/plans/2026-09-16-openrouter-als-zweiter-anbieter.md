@@ -177,7 +177,9 @@ public interface IAiProvider
 }
 ```
 
-3b — In `GeminiService.cs` die Klassendeklaration erweitern und die Eigenschaft ergänzen. Aus
+3b — **`AiProbeResult` steht heute als geschachtelter Record INNERHALB der Klasse `GeminiService`** (dort entstanden, als die Handprobe gebaut wurde). So kann die anbieterneutrale Schnittstelle ihn nicht referenzieren, ohne sich an Gemini zu binden. Zieh ihn deshalb aus dem Klassenkörper heraus auf die Namensraumebene `NutriTrack.Api.Services`, zu `AiParseResult`, `AiItem` und `AiWishResult` — die vier sind dieselbe Art von Ding, das interne Ergebnisformat der Erfassung. Nicht nach `NutriTrack.Api.Contracts.Ai`: dort liegen die Verträge nach außen, und `AiProbeResult` geht nie so hinaus (`AdminEndpoints` bildet es erst auf `AiProbeResponse` ab). An seinen Feldern und an der Logik von `ProbeAsync` ändert sich dabei nichts. Zieh die Verwendungsstellen nach, falls eine den qualifizierten Namen nutzt.
+
+3c — In `GeminiService.cs` die Klassendeklaration erweitern und die Eigenschaft ergänzen. Aus
 
 ```csharp
 public class GeminiService(
