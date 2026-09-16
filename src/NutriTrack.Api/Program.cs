@@ -97,6 +97,7 @@ builder.Services.AddScoped<TokenService>();
 builder.Services.AddScoped<AiMealAssistant>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<AiRateLimiter>();
+builder.Services.AddSingleton<AiSettingsProvider>();
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<OpenFoodFactsThrottle>();
 
