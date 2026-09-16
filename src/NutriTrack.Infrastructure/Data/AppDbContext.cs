@@ -11,6 +11,8 @@ public class AppDbContext : IdentityDbContext
     public DbSet<FoodItem> FoodItems => Set<FoodItem>();
     public DbSet<MealEntry> MealEntries => Set<MealEntry>();
     public DbSet<UserGoal> UserGoals => Set<UserGoal>();
+    public DbSet<AiSettings> AiSettings => Set<AiSettings>();
+    public DbSet<AiFailure> AiFailures => Set<AiFailure>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
