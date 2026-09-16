@@ -38,7 +38,13 @@ public class AiProbeResponse
     public string RawBody { get; set; } = string.Empty;
 }
 
-public class AiFailureResponse
+/// <summary>
+/// Ein Eintrag aus dem Fehlerprotokoll - keine Antwort AUF einen Fehler. Eigener Name statt
+/// "AiFailureResponse", weil genau dieser bereits als Fehler-Mapper in Endpoints.AiFailureResponse
+/// existiert; zwei gleichnamige, unverwandte Typen im selben Projekt waeren eine Falle fuer den
+/// naechsten, der in NutriTrack.Api.Endpoints den kurzen Namen tippt und dieses DTO meint.
+/// </summary>
+public class AiFailureLogEntry
 {
     public DateTime OccurredAt { get; set; }
     public string Kind { get; set; } = string.Empty;

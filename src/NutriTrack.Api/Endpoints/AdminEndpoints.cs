@@ -100,9 +100,7 @@ public static class AdminEndpoints
                 .AsNoTracking()
                 .OrderByDescending(f => f.OccurredAt)
                 .Take(AiFailureRecorder.MaxEntries)
-                // Voll qualifiziert: Endpoints.AiFailureResponse (der Fehler-Mapper von AiEndpoints)
-                // traegt denselben einfachen Namen wie der Antwort-Typ hier und wuerde sonst gewinnen.
-                .Select(f => new NutriTrack.Api.Contracts.Admin.AiFailureResponse
+                .Select(f => new AiFailureLogEntry
                 {
                     OccurredAt = f.OccurredAt,
                     Kind = f.Kind,
