@@ -89,6 +89,11 @@ public class AiSettingsProvider(
         }
     }
 
+    // Bewusst synchron gelesen, obwohl der Rest des Repos durchgehend async arbeitet: await ist
+    // innerhalb eines lock nicht erlaubt, und dieser Pfad laeuft nur beim Kaltstart und nach
+    // Invalidate() - eine einzelne Zeile aus einer lokalen SQLite-Datei. Ein Umbau auf
+    // ReadAsync() zoege GeminiService, den Fehlerprotokoll-Schreiber und die Admin-Endpunkte mit,
+    // fuer einen Effekt, der hier nicht messbar ist.
     private AiSettings? Gespeicherte()
     {
         lock (_gate)
@@ -102,6 +107,15 @@ public class AiSettingsProvider(
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 _cached = db.AiSettings.AsNoTracking().SingleOrDefault();
             }
+            catch (OperationCanceledException)
+            {
+                // Greift heute nicht - synchron gelesen, kein Token im Spiel. Der Guard steht
+                // trotzdem hier, dieselbe Haltung wie bei LoadHistoryAsync im AiMealAssistant:
+                // ein Abbruch durch den Aufrufer ist kein Ladefehler und soll durchschlagen,
+                // nicht als "AiSettings nicht lesbar" enden - sonst wird das bei einem spaeteren
+                // Umbau auf async zur stillen Falle.
+                throw;
+            }
             catch (Exception ex)
             {
                 // Eine kaputte Nebensache darf die Haupterfassung nicht mitreissen - dieselbe
@@ -109,7 +123,14 @@ public class AiSettingsProvider(
                 // der Rueckfall auf die Umgebung allerdings unsichtbar, und dann sucht jemand
                 // stundenlang, warum sein gespeichertes Modell nicht wirkt.
                 logger.LogWarning(ex, "AiSettings nicht lesbar; es gelten die Werte aus der Konfiguration.");
-                _cached = null;
+
+                // Nicht als geladen markieren: sonst friert ein Aussetzer beim Kaltstart bis zum
+                // naechsten Invalidate() oder Prozessneustart ein und maskiert die gespeicherten
+                // Werte auf unbestimmte Zeit - still bis auf die Logzeile oben. Der naechste
+                // Read() versucht es stattdessen erneut. Laermgefahr besteht praktisch nicht: ist
+                // die Datenbank dauerhaft kaputt, funktioniert in dieser Anwendung ohnehin nichts
+                // mehr.
+                return null;
             }
 
             _geladen = true;

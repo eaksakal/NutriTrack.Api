@@ -153,4 +153,49 @@ public class AiSettingsProviderTests(NutriTrackApiFactory factory) : IClassFixtu
         provider.Invalidate();
         Assert.Equal("gemini-3.6-flash", provider.Read().Model);
     }
+
+    [Fact]
+    public async Task Read_RecoversAfterTransientDatabaseFailure_WithoutInvalidate()
+    {
+        // Reviewbefund: nach einem gefangenen Fehler darf der Provider den Fehlzustand nicht bis
+        // zum naechsten Invalidate() einfrieren - sonst maskiert ein kurzer Aussetzer beim
+        // Kaltstart die gespeicherten Werte auf unbestimmte Zeit. Eigene Factory-Instanz wie beim
+        // DROP-TABLE-Test, damit die geteilte Testdatenbank unangetastet bleibt.
+        using var eigene = new NutriTrackApiFactory();
+        await eigene.ResetDatabaseAsync();
+        eigene.CreateClient();
+
+        using (var scope = eigene.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.Database.ExecuteSqlRawAsync("DROP TABLE AiSettings");
+        }
+
+        var provider = eigene.Services.GetRequiredService<AiSettingsProvider>();
+        provider.Invalidate();
+
+        var waehrendDesAusfalls = provider.Read();
+        Assert.Equal("gemini-3.6-flash", waehrendDesAusfalls.Model);
+        Assert.False(waehrendDesAusfalls.ModelFromDb);
+
+        // Tabelle wiederherstellen und eine Zeile ablegen - OHNE Invalidate() aufzurufen. Genau
+        // das soll der naechste Read() von selbst bemerken, wenn der Fehlzustand nicht
+        // gecacht wurde.
+        await eigene.ResetDatabaseAsync();
+
+        using (var scope = eigene.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.AiSettings.Add(new AiSettings
+            {
+                Id = 1, Model = "gemini-3.1-flash-lite", ThinkingLevel = null, MaxOutputTokens = null,
+                UpdatedAt = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var nachDerErholung = provider.Read();
+        Assert.Equal("gemini-3.1-flash-lite", nachDerErholung.Model);
+        Assert.True(nachDerErholung.ModelFromDb);
+    }
 }
