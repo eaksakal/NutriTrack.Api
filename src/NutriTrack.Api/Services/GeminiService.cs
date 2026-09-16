@@ -115,13 +115,25 @@ public class AiItem
     public NutrientEstimate Estimate { get; set; } = new();
 }
 
+/// <summary>
+/// Ergebnis einer Handprobe: was wirklich zurueckkam, nicht was der Code daraus macht.
+///
+/// Auf Namespace-Ebene wie die anderen drei Ergebnistypen, nicht in GeminiService geschachtelt:
+/// alle vier sind dasselbe interne Ergebnisformat der KI-Erfassung, das beide Anbieter fuellen.
+/// Anfangs steckte er in der Klasse - ein Versehen beim Bau der Handprobe, kein Entwurf.
+/// </summary>
+public sealed record AiProbeResult(
+    int StatusCode, long DurationMs, string Model, string ThinkingLevel, string RawBody);
+
 public class GeminiService(
     HttpClient httpClient,
     IConfiguration configuration,
     AiSettingsProvider settingsProvider,
     ILogger<GeminiService> logger,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider) : IAiProvider
 {
+    public string Name => IAiProvider.Gemini;
+
     private const string Endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions";
 
     // Die Interactions-API ist revisioniert. Ohne diesen Header liefert Google die jeweils
@@ -689,12 +701,6 @@ public class GeminiService(
         root.ValueKind == JsonValueKind.Object
             ? $"Wurzelfelder [{string.Join(", ", root.EnumerateObject().Select(property => property.Name))}]"
             : $"Wurzelelement vom Typ {root.ValueKind}";
-
-    /// <summary>
-    /// Ergebnis einer Handprobe: was wirklich zurueckkam, nicht was der Code daraus macht.
-    /// </summary>
-    public sealed record AiProbeResult(
-        int StatusCode, long DurationMs, string Model, string ThinkingLevel, string RawBody);
 
     /// <summary>
     /// EIN Aufruf mit den geltenden Einstellungen und einer FESTEN Beispieleingabe, dessen

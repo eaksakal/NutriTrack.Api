@@ -555,4 +555,16 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
         Assert.Equal(429, result.StatusCode);
         Assert.Contains("quota", result.RawBody, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void GeminiService_IsAnAiProvider()
+    {
+        // Die Anwendung soll den Anbieter ueber die Schnittstelle ansprechen, nicht ueber den
+        // konkreten Typ - sonst entscheidet die Registrierung beim Start, was erst zur Laufzeit
+        // feststeht.
+        IAiProvider provider = Service();
+
+        Assert.Equal(IAiProvider.Gemini, provider.Name);
+        Assert.Equal("gemini", provider.Name);
+    }
 }
