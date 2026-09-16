@@ -334,6 +334,7 @@ app.MapFoodEndpoints();
 app.MapMealEndpoints();
 app.MapGoalsEndpoints();
 app.MapAiEndpoints();
+app.MapAdminEndpoints();
 
 // Ohne Kontaktadresse laeuft NutriTrack weiter, aber OpenFoodFacts darf uns dann jederzeit als
 // anonymen Bot einstufen. Das ist eine Betriebsentscheidung, kein Programmfehler - deshalb ein
