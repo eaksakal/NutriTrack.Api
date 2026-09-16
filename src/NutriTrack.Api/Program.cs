@@ -344,6 +344,15 @@ if (string.IsNullOrWhiteSpace(app.Configuration["OpenFoodFacts:ContactEmail"]))
         "OpenFoodFacts:ContactEmail ist nicht gesetzt. OpenFoodFacts verlangt einen User-Agent " +
         "der Form \"NutriTrack/1.0 (adresse@example.com)\" und kann Aufrufe ohne Kennung sperren.");
 
+// Ohne Eintrag laeuft NutriTrack ebenfalls weiter, aber die KI-Verwaltung unter /admin bleibt
+// fuer JEDEN unerreichbar, auch fuer den Betreiber selbst (siehe AdminEndpoints.IstAdmin) - das
+// ist Absicht, kein Fehler. Ohne diese Logzeile sieht der Betreiber nur eine Anwendung ohne
+// KI-Menuepunkt und keine einzige Spur, warum.
+if (string.IsNullOrWhiteSpace(app.Configuration["Admin:Email"]))
+    app.Logger.LogWarning(
+        "Admin:Email ist nicht gesetzt. Die KI-Verwaltung unter /admin bleibt dadurch fuer " +
+        "niemanden erreichbar, auch nicht fuer den Betreiber selbst.");
+
 // Unbekannte /api-Pfade muessen 404 bleiben. Der Catch-all steht in der Routen-Rangfolge unter
 // jedem konkreten Endpunkt (Literale schlagen Catch-all), greift aber vor dem SPA-Fallback -
 // sonst bekaeme ein Tippfehler in der API-URL das index.html mit Status 200 zurueck und das

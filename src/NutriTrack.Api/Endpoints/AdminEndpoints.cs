@@ -68,6 +68,18 @@ public static class AdminEndpoints
             if (!IstAdmin(user, configuration))
                 return Results.NotFound();
 
+            // Fehlender Schluessel ist die wahrscheinlichste Fehlkonfiguration ueberhaupt, und
+            // ausgerechnet dafuer sagte die Probe bisher nichts Brauchbares: ohne diese Pruefung
+            // wirft GeminiService.ProbeAsync eine GeminiUnavailableException, die hier ungefangen
+            // durchschlaegt - dieses Projekt hat weder UseExceptionHandler noch AddProblemDetails,
+            // also kommt ein 500 ohne Rumpf heraus. Vor der Bremse und nicht danach: ein Aufruf,
+            // der ohnehin nicht klappen kann, soll keinen Platz aus dem Kontingentzaehler
+            // verbrennen (siehe Kommentar an TryAcquire unten).
+            if (string.IsNullOrWhiteSpace(configuration["Gemini:ApiKey"]))
+                return Results.Json(
+                    new { Error = "Verbindungstest ist nicht möglich (Gemini:ApiKey fehlt)." },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+
             var userId = user.FindFirst(ClaimTypes.NameIdentifier)!.Value;
 
             // Dieselbe Bremse wie die normale Erfassung: jede Probe verbraucht eine Anfrage aus

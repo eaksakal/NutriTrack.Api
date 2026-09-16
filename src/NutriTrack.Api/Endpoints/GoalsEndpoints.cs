@@ -35,6 +35,7 @@ public static class GoalsEndpoints
             ClaimsPrincipal user,
             AiRateLimiter limiter,
             HttpResponse httpResponse,
+            AiFailureRecorder recorder,
             CancellationToken ct) =>
         {
             if (request.WeightKg is < 25m or > 400m)
@@ -79,6 +80,7 @@ public static class GoalsEndpoints
                         new { Error = "Zu viele KI-Anfragen in der letzten Stunde. Versuche es später noch einmal." },
                         statusCode: StatusCodes.Status429TooManyRequests);
 
+                var uhr = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
                     // HIER GEHT NUR DER WUNSCH RAUS. Gewicht, Groesse, Alter und Geschlecht
@@ -104,10 +106,25 @@ public static class GoalsEndpoints
                 }
                 catch (GeminiQuotaException ex)
                 {
+                    await recorder.RecordAsync("Quota", ex.Message, uhr.ElapsedMilliseconds, 429);
                     return AiQuotaResponse.From(ex, httpResponse);
                 }
-                catch (Exception ex) when (ex is GeminiUnavailableException or GeminiMalformedResponseException)
+                catch (GeminiMalformedResponseException ex)
                 {
+                    await recorder.RecordAsync("Schema", ex.Message, uhr.ElapsedMilliseconds, null);
+                    return AiFailureResponse.From(
+                        ex,
+                        "Die KI ist gerade nicht erreichbar. Du kannst die Ziele von Hand eintragen.",
+                        StatusCodes.Status503ServiceUnavailable);
+                }
+                catch (GeminiUnavailableException ex)
+                {
+                    // Dieselbe Unterscheidung wie in AiEndpoints: der Typ der inneren Ausnahme
+                    // entscheidet ueber Timeout vs. Unavailable, nie ein Wortabgleich auf
+                    // ex.Detail (Begruendung dort).
+                    var art = ex.InnerException is TaskCanceledException ? "Timeout" : "Unavailable";
+                    await recorder.RecordAsync(art, ex.Detail, uhr.ElapsedMilliseconds, null);
+
                     return AiFailureResponse.From(
                         ex,
                         "Die KI ist gerade nicht erreichbar. Du kannst die Ziele von Hand eintragen.",

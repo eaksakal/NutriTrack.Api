@@ -24,6 +24,21 @@ public class AdminEndpointTests
         }
     }
 
+    /// <summary>
+    /// Wie <see cref="AdminFactory"/>, aber zusaetzlich ohne Gemini:ApiKey - die Standard-Factory
+    /// setzt immer einen Testschluessel (siehe NutriTrackApiFactory), nur hier soll er fehlen.
+    /// Dasselbe Muster wie AiEndpointTests.WithoutGeminiKeyFactory.
+    /// </summary>
+    private sealed class AdminFactoryWithoutGeminiKey(string adminEmail) : NutriTrackApiFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.UseSetting("Admin:Email", adminEmail);
+            builder.UseSetting("Gemini:ApiKey", null);
+        }
+    }
+
     [Fact]
     public async Task Settings_ForNonAdmin_ReturnsNotFound()
     {
@@ -126,6 +141,28 @@ public class AdminEndpointTests
         Assert.Equal(200, json.GetProperty("statusCode").GetInt32());
         Assert.Equal("gemini-3.6-flash", json.GetProperty("model").GetString());
         Assert.Contains("model_output", json.GetProperty("rawBody").GetString()!);
+    }
+
+    /// <summary>
+    /// Der Blocker aus dem Branch-Review: fehlt der Schluessel, wirft GeminiService.ProbeAsync
+    /// eine GeminiUnavailableException. Ohne die vorab-Pruefung schluege das ungefangen durch -
+    /// dieses Projekt hat weder UseExceptionHandler noch AddProblemDetails - und die Oberflaeche
+    /// saehe nur "Verbindungstest fehlgeschlagen. (HTTP 500)". Ein fehlender Schluessel ist die
+    /// wahrscheinlichste Fehlkonfiguration ueberhaupt; ausgerechnet dafuer muss das Werkzeug, das
+    /// die SSH-Diagnose ersetzen soll, einen sprechenden Text liefern.
+    /// </summary>
+    [Fact]
+    public async Task Probe_WithoutConfiguredKey_ReturnsServiceUnavailableWithClearText()
+    {
+        using var f = new AdminFactoryWithoutGeminiKey("chef@example.com");
+        await f.ResetDatabaseAsync();
+        var (client, _, _) = await f.CreateUserAsync("chef@example.com");
+
+        var response = await client.PostAsync("/api/admin/settings/probe", null);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("ApiKey", json.GetProperty("error").GetString());
     }
 
     [Fact]

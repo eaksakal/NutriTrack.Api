@@ -239,7 +239,12 @@ public class GeminiService(
         catch (JsonException ex)
         {
             logger.LogWarning(ex, "Gemini-Antwort passt nicht zum Schema.");
-            throw new GeminiMalformedResponseException("Antwort passt nicht zum Schema.");
+
+            // ex.Message reicht durch, statt in der Konstante zu versanden: System.Text.Json
+            // nennt darin Pfad und Position ("Path: $.items[0].estimate.sugar | LineNumber: ..."),
+            // NIE den gelesenen Wert (belegt in AiFailureLogTests). Genau dieser Pfad haette die
+            // Ziffernschleife vom 2026-09-15 in Sekunden statt Stunden verraten.
+            throw new GeminiMalformedResponseException($"Antwort passt nicht zum Schema: {ex.Message}");
         }
 
         foreach (var item in result.Items)
@@ -607,7 +612,10 @@ public class GeminiService(
         catch (JsonException ex)
         {
             logger.LogWarning(ex, "Gemini-Antwort zum Zielwunsch passt nicht zum Schema.");
-            throw new GeminiMalformedResponseException("Antwort passt nicht zum Schema.");
+
+            // Dieselbe Begruendung wie in ParseAsync: ex.Message nennt nur Pfad und Position,
+            // nie den Wert, und ist damit sicher fuers Protokoll.
+            throw new GeminiMalformedResponseException($"Antwort passt nicht zum Schema: {ex.Message}");
         }
     }
 

@@ -90,6 +90,49 @@ public class AiFailureLogTests(NutriTrackApiFactory factory) : IClassFixture<Nut
         Assert.Contains(protokoll, f => f.Kind == "Schema");
     }
 
+    /// <summary>
+    /// Der Fall vom 2026-09-15: estimate.sugar geriet in eine Ziffernschleife und sprengte
+    /// decimal. Vor diesem Fix stand im Protokoll immer derselbe Satz ("Antwort passt nicht zum
+    /// Schema.") - genau die Information, die den Fehler erklaert haette (der Pfad), fehlte.
+    /// Dieser Test haelt zweierlei zugleich fest: den Pfad im Protokoll UND, dass der Esstext -
+    /// die tragende Zusage des ganzen Features - dabei draussen bleibt. System.Text.Json nennt in
+    /// seiner Fehlermeldung fuer eine solche Typkonvertierung ausdruecklich nur Pfad und Position,
+    /// nie den gelesenen Wert; die letzte Assertion unten belegt das fuer die Ziffernkette selbst.
+    /// </summary>
+    [Fact]
+    public async Task SchemaBreak_IsRecordedWithPathButWithoutTheMealText()
+    {
+        await LeereAsync();
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        var vieleNeunen = new string('9', 40);
+        factory.GeminiResponder = _ => StubGeminiHandler.Payload($$"""
+        {
+          "items": [
+            { "searchTerm": "Zwetschgendatschi", "label": "Zwetschgendatschi",
+              "quantityInGrams": 100, "mealType": "Snack", "productKind": "generic",
+              "estimate": { "calories": 250, "protein": 4, "carbohydrates": 40, "fat": 8,
+                            "sugar": {{vieleNeunen}} } }
+          ]
+        }
+        """);
+
+        // Ein Wort, das ausser in der Mahlzeit nirgends vorkommt - dieselbe Probe wie beim
+        // Zeitdeckel-Test oben.
+        await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "ein Zwetschgendatschi mit viel Zucker" } }
+        });
+
+        var eintrag = Assert.Single(await ProtokollAsync());
+        Assert.Equal("Schema", eintrag.Kind);
+        Assert.Contains("estimate.sugar", eintrag.Reason);
+        Assert.DoesNotContain("Zwetschgendatschi", eintrag.Reason);
+        // Die entgleiste Ziffernkette selbst darf ebenfalls nicht im Protokoll landen - waere sie
+        // drin, waere estimate.sugar in Wahrheit ein Wert und keine Positionsangabe.
+        Assert.DoesNotContain(vieleNeunen, eintrag.Reason);
+    }
+
     [Fact]
     public async Task Quota_IsRecordedWithStatusCode()
     {
@@ -106,6 +149,32 @@ public class AiFailureLogTests(NutriTrackApiFactory factory) : IClassFixture<Nut
         var eintrag = Assert.Single(await ProtokollAsync());
         Assert.Equal("Quota", eintrag.Kind);
         Assert.Equal(429, eintrag.StatusCode);
+    }
+
+    /// <summary>
+    /// GoalsEndpoints ruft Gemini ebenfalls auf (die Deutung eines Zielwunsches), protokollierte
+    /// Fehlschlaege dort bislang aber gar nicht. Dieser Test belegt sowohl das Nachziehen als auch
+    /// die tragende Zusage auf dem zweiten Pfad: der Zielwunsch-Text darf ins Protokoll so wenig
+    /// wie der Esstext.
+    /// </summary>
+    [Fact]
+    public async Task GoalsSuggest_Timeout_IsRecordedWithoutTheWishText()
+    {
+        await LeereAsync();
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        factory.GeminiResponder = _ => throw new TaskCanceledException("Zeitdeckel im Test.");
+
+        // Ein Wort, das ausser im Zielwunsch nirgends vorkommt.
+        await client.PostAsJsonAsync("/api/goals/suggest", new
+        {
+            weightKg = 82, heightCm = 180, age = 35, sex = "male",
+            activityLevel = "sedentary", wish = "Marathonvorbereitung mit Radikaldiaet"
+        });
+
+        var eintrag = Assert.Single(await ProtokollAsync());
+        Assert.Equal("Timeout", eintrag.Kind);
+        Assert.DoesNotContain("Marathonvorbereitung", eintrag.Reason);
     }
 
     [Fact]
