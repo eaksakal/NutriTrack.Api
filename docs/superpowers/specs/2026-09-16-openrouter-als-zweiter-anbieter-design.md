@@ -127,9 +127,14 @@ OpenRouters öffentlichen Ranglisten, und der Name einer privaten Instanz gehör
 beim Umschalten jedes Mal ein Nachtippen, und der zuletzt genutzte Wert des anderen Anbieters
 ginge verloren.
 
-Der Rückfall auf die Umgebung gilt wie bisher je Feld: `Ai__Provider`,
-`OpenRouter__Model`, `OpenRouter__ApiKey`. Der Schlüssel steht wie der von Google ausschließlich
-in der `.env` und taucht in keiner Antwort auf.
+Der Rückfall auf die Umgebung gilt wie bisher je Feld. In `docker-compose.yml` heißen die
+Variablen `Ai__Provider`, `OpenRouter__Model` und `OpenRouter__ApiKey`; sie werden aus
+`NUTRITRACK_AI_PROVIDER`, `NUTRITRACK_OPENROUTER_MODEL` und **`NUTRITRACK_OPENROUTER_KEY`**
+gespeist — letztere liegt seit dem 2026-09-16 in der `.env` des Zielrechners und darf nicht
+umbenannt werden, sonst findet die Anwendung den bereits hinterlegten Schlüssel nicht.
+
+Der Schlüssel steht wie der von Google ausschließlich in der `.env`, taucht in keiner Antwort auf
+und ist über die Verwaltungsoberfläche weder lesbar noch änderbar.
 
 ### Oberfläche
 
