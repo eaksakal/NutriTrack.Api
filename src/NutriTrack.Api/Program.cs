@@ -95,6 +95,7 @@ if (string.IsNullOrWhiteSpace(jwtIssuer) || string.IsNullOrWhiteSpace(jwtAudienc
 builder.Services.AddOpenApi();
 builder.Services.AddScoped<TokenService>();
 builder.Services.AddScoped<AiMealAssistant>();
+builder.Services.AddScoped<AiFailureRecorder>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<AiRateLimiter>();
 builder.Services.AddSingleton<AiSettingsProvider>();

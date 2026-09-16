@@ -17,6 +17,7 @@ public static class AiEndpoints
             ClaimsPrincipal user,
             AiRateLimiter limiter,
             HttpResponse httpResponse,
+            AiFailureRecorder recorder,
             CancellationToken ct) =>
         {
             const int MaxMessages = 10;
@@ -43,6 +44,7 @@ public static class AiEndpoints
                     new { Error = "Zu viele KI-Anfragen in der letzten Stunde. Versuche es später noch einmal." },
                     statusCode: StatusCodes.Status429TooManyRequests);
 
+            var uhr = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var result = await assistant.ParseAsync(request.Messages, userId, ct);
@@ -50,10 +52,13 @@ public static class AiEndpoints
             }
             catch (GeminiQuotaException ex)
             {
+                await recorder.RecordAsync("Quota", ex.Message, uhr.ElapsedMilliseconds, 429, ct);
                 return AiQuotaResponse.From(ex, httpResponse);
             }
             catch (GeminiMalformedResponseException ex)
             {
+                await recorder.RecordAsync("Schema", ex.Message, uhr.ElapsedMilliseconds, null, ct);
+
                 // Ein Wiederholungsversuch steckt bereits im Assistenten; kommt es hier an,
                 // hat auch der zweite Anlauf Unsinn geliefert.
                 return AiFailureResponse.From(
@@ -63,6 +68,13 @@ public static class AiEndpoints
             }
             catch (GeminiUnavailableException ex)
             {
+                // Zeitdeckel und Netzausfall sehen von aussen gleich aus, verlangen aber
+                // Verschiedenes: der eine ist eine Frage der Einstellung, der andere nicht.
+                var art = ex.Detail.Contains("rechtzeitig", StringComparison.OrdinalIgnoreCase)
+                    ? "Timeout"
+                    : "Unavailable";
+                await recorder.RecordAsync(art, ex.Detail, uhr.ElapsedMilliseconds, null, ct);
+
                 return AiFailureResponse.From(
                     ex,
                     "Die KI ist gerade nicht erreichbar.",
