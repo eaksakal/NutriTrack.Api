@@ -95,8 +95,10 @@ if (string.IsNullOrWhiteSpace(jwtIssuer) || string.IsNullOrWhiteSpace(jwtAudienc
 builder.Services.AddOpenApi();
 builder.Services.AddScoped<TokenService>();
 builder.Services.AddScoped<AiMealAssistant>();
+builder.Services.AddScoped<AiFailureRecorder>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<AiRateLimiter>();
+builder.Services.AddSingleton<AiSettingsProvider>();
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<OpenFoodFactsThrottle>();
 
@@ -332,6 +334,7 @@ app.MapFoodEndpoints();
 app.MapMealEndpoints();
 app.MapGoalsEndpoints();
 app.MapAiEndpoints();
+app.MapAdminEndpoints();
 
 // Ohne Kontaktadresse laeuft NutriTrack weiter, aber OpenFoodFacts darf uns dann jederzeit als
 // anonymen Bot einstufen. Das ist eine Betriebsentscheidung, kein Programmfehler - deshalb ein
@@ -340,6 +343,15 @@ if (string.IsNullOrWhiteSpace(app.Configuration["OpenFoodFacts:ContactEmail"]))
     app.Logger.LogWarning(
         "OpenFoodFacts:ContactEmail ist nicht gesetzt. OpenFoodFacts verlangt einen User-Agent " +
         "der Form \"NutriTrack/1.0 (adresse@example.com)\" und kann Aufrufe ohne Kennung sperren.");
+
+// Ohne Eintrag laeuft NutriTrack ebenfalls weiter, aber die KI-Verwaltung unter /admin bleibt
+// fuer JEDEN unerreichbar, auch fuer den Betreiber selbst (siehe AdminEndpoints.IstAdmin) - das
+// ist Absicht, kein Fehler. Ohne diese Logzeile sieht der Betreiber nur eine Anwendung ohne
+// KI-Menuepunkt und keine einzige Spur, warum.
+if (string.IsNullOrWhiteSpace(app.Configuration["Admin:Email"]))
+    app.Logger.LogWarning(
+        "Admin:Email ist nicht gesetzt. Die KI-Verwaltung unter /admin bleibt dadurch fuer " +
+        "niemanden erreichbar, auch nicht fuer den Betreiber selbst.");
 
 // Unbekannte /api-Pfade muessen 404 bleiben. Der Catch-all steht in der Routen-Rangfolge unter
 // jedem konkreten Endpunkt (Literale schlagen Catch-all), greift aber vor dem SPA-Fallback -

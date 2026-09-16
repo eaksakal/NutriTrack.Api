@@ -96,6 +96,10 @@ services:
       # behandelt Aufrufer ohne erkennbare Kennung im Zweifel als Bot. Ohne Wert laeuft alles
       # weiter, aber mit hoeherem Sperrrisiko - deshalb kein Pflichtfeld.
       - OpenFoodFacts__ContactEmail=${NUTRITRACK_OFF_CONTACT:-}
+      # Wer die KI-Verwaltung sehen darf. NICHT gesetzt heisst: niemand - ein vergessener
+      # Eintrag darf die Seite nicht fuer alle oeffnen. Es gibt bewusst nur einen Administrator;
+      # Rollen waeren fuer einen Betreiber viel Maschinerie.
+      - Admin__Email=${NUTRITRACK_ADMIN_EMAIL:-}
       - TZ=Europe/Berlin
       - DOTNET_gcServer=0
     healthcheck:

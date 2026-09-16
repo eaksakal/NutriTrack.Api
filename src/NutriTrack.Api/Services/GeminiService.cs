@@ -118,6 +118,7 @@ public class GeminiItem
 public class GeminiService(
     HttpClient httpClient,
     IConfiguration configuration,
+    AiSettingsProvider settingsProvider,
     ILogger<GeminiService> logger,
     TimeProvider timeProvider)
 {
@@ -238,7 +239,12 @@ public class GeminiService(
         catch (JsonException ex)
         {
             logger.LogWarning(ex, "Gemini-Antwort passt nicht zum Schema.");
-            throw new GeminiMalformedResponseException("Antwort passt nicht zum Schema.");
+
+            // ex.Message reicht durch, statt in der Konstante zu versanden: System.Text.Json
+            // nennt darin Pfad und Position ("Path: $.items[0].estimate.sugar | LineNumber: ..."),
+            // NIE den gelesenen Wert (belegt in AiFailureLogTests). Genau dieser Pfad haette die
+            // Ziffernschleife vom 2026-09-15 in Sekunden statt Stunden verraten.
+            throw new GeminiMalformedResponseException($"Antwort passt nicht zum Schema: {ex.Message}");
         }
 
         foreach (var item in result.Items)
@@ -362,36 +368,13 @@ public class GeminiService(
         if (string.IsNullOrWhiteSpace(apiKey))
             throw Unavailable("Gemini:ApiKey fehlt.");
 
-        var model = configuration["Gemini:Model"] is { Length: > 0 } configured
-            ? configured
-            : "gemini-3.6-flash";
-
-        // NICHT auf gemini-3.5-flash zurueckstellen. Das Modell steht zwar weiterhin in
-        // /v1beta/models, ist ueber /v1beta/interactions aber tot: gemessen am 2026-09-15 vom
-        // Betriebsrechner schickt Google darauf ueber 50 s KEIN EINZIGES BYTE - kein 404, kein
-        // 400, nur Schweigen, bis der Zeitdeckel zuschlaegt. Derselbe Rumpf gegen
-        // gemini-3.6-flash: 200 nach 2,9 s. Das sah wie ein zu knapper Deckel aus und kostete
-        // zwei Erhoehungen (15 -> 25 -> 45 s), bevor jemand die Antwortzeit wirklich MASS.
-        // 3.7 und 3.8 scheiden aus: sie lehnen thinking_level=minimal ab.
-
-        // Gemessen am echten Dienst (gemini-3.5-flash, 2026-09-12, gleiche Eingabe):
-        //   Standard  8-15 s, 859 Denk-Token, 1185 Token gesamt  (riss den Zeitdeckel)
-        //   low        5,3 s, 637 Denk-Token,  843 Token gesamt
-        //   minimal    3,0 s,   0 Denk-Token,  210 Token gesamt
-        // Gleiche Qualitaet bei einem Fuenftel der Token - deshalb minimal. Konfigurierbar, weil
-        // nicht jedes Modell dieselben Stufen kennt (minimal/low/medium/high).
-        var thinkingLevel = configuration["Gemini:ThinkingLevel"] is { Length: > 0 } stufe ? stufe : "minimal";
-
-        // OBERGRENZE FUER DIE AUSGABE. Ohne sie schreibt ein entgleistes Modell, bis der
-        // Zeitdeckel zuschlaegt. Am 2026-09-15 im Betrieb beobachtet: estimate.sugar kam mit
-        // ueber 9000 Ziffern zurueck (JsonException "too large for a Decimal"), und mehrere
-        // Anfragen liefen dabei in die vollen 45 s. Mit Deckel bricht derselbe Fall nach wenigen
-        // Sekunden ab - wichtig vor allem, weil der zweite Anlauf in AiMealAssistant sonst gar
-        // nicht mehr stattfindet: zwei Laeufe a 45 s sprengen jede Geduld.
-        // 4096 ist reichlich bemessen: eine normale Antwort mit zwei Posten misst rund 600 Token,
-        // die erlaubten 20 Posten liegen bei etwa 1700. Der Deckel soll Entgleisungen fangen,
-        // nicht lange Mahlzeiten.
-        var maxOutputTokens = configuration.GetValue("Gemini:MaxOutputTokens", 4096);
+        // Die Werte kommen aus der Verwaltungsoberflaeche, mit Rueckfall auf die Umgebung. Die
+        // Begruendungen zu den einzelnen Werten stehen am AiSettingsProvider und in
+        // .env.example; hier wird nur noch gelesen.
+        var einstellungen = settingsProvider.Read();
+        var model = einstellungen.Model;
+        var thinkingLevel = einstellungen.ThinkingLevel;
+        var maxOutputTokens = einstellungen.MaxOutputTokens;
 
         // system_instruction ist ein eigenes Feld der Interactions-API. Die Anweisung dort
         // unterzubringen statt sie dem Nutzertext voranzustellen, haelt beides sauber getrennt:
@@ -629,7 +612,10 @@ public class GeminiService(
         catch (JsonException ex)
         {
             logger.LogWarning(ex, "Gemini-Antwort zum Zielwunsch passt nicht zum Schema.");
-            throw new GeminiMalformedResponseException("Antwort passt nicht zum Schema.");
+
+            // Dieselbe Begruendung wie in ParseAsync: ex.Message nennt nur Pfad und Position,
+            // nie den Wert, und ist damit sicher fuers Protokoll.
+            throw new GeminiMalformedResponseException($"Antwort passt nicht zum Schema: {ex.Message}");
         }
     }
 
@@ -703,6 +689,85 @@ public class GeminiService(
         root.ValueKind == JsonValueKind.Object
             ? $"Wurzelfelder [{string.Join(", ", root.EnumerateObject().Select(property => property.Name))}]"
             : $"Wurzelelement vom Typ {root.ValueKind}";
+
+    /// <summary>
+    /// Ergebnis einer Handprobe: was wirklich zurueckkam, nicht was der Code daraus macht.
+    /// </summary>
+    public sealed record GeminiProbeResult(
+        int StatusCode, long DurationMs, string Model, string ThinkingLevel, string RawBody);
+
+    /// <summary>
+    /// EIN Aufruf mit den geltenden Einstellungen und einer FESTEN Beispieleingabe, dessen
+    /// Rohantwort zurueckkommt.
+    ///
+    /// Fest und nicht vom Nutzer gewaehlt aus zwei Gruenden: zwei Laeufe sind nur vergleichbar,
+    /// wenn die Eingabe dieselbe ist, und eine Probe mit freiem Text waere ein zweiter Weg, auf
+    /// dem Mahlzeitentexte an Google gehen.
+    ///
+    /// Wirft NICHT bei einem Fehlerstatus. Ein 429 oder ein Schweigen des Dienstes ist genau das,
+    /// was der Betreiber hier sehen will - eine Ausnahme wuerde die Diagnose verstecken, um deren
+    /// willen es diese Methode gibt.
+    /// </summary>
+    public async Task<GeminiProbeResult> ProbeAsync(CancellationToken ct)
+    {
+        var apiKey = configuration["Gemini:ApiKey"];
+        if (string.IsNullOrWhiteSpace(apiKey))
+            throw Unavailable("Gemini:ApiKey fehlt.");
+
+        var einstellungen = settingsProvider.Read();
+        var start = timeProvider.GetTimestamp();
+
+        var payload = new
+        {
+            model = einstellungen.Model,
+            input = "Nutzer: zwei Broetchen mit Gouda\n",
+            system_instruction = SystemInstruction,
+            response_format = new
+            {
+                type = "text",
+                mime_type = "application/json",
+                schema = ResponseSchema
+            },
+            generation_config = new
+            {
+                thinking_level = einstellungen.ThinkingLevel,
+                max_output_tokens = einstellungen.MaxOutputTokens
+            }
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8, "application/json")
+        };
+        request.Headers.Add("x-goog-api-key", apiKey);
+        request.Headers.Add("Api-Revision", ApiRevision);
+
+        int status;
+        string rumpf;
+        try
+        {
+            using var response = await httpClient.SendAsync(request, ct);
+            status = (int)response.StatusCode;
+            rumpf = await response.Content.ReadAsStringAsync(ct);
+        }
+        catch (Exception ex) when (ex is TaskCanceledException or HttpRequestException && !ct.IsCancellationRequested)
+        {
+            // Status 0 heisst "gar keine Antwort". Genau dieser Fall - Verbindung steht, aber der
+            // Dienst schweigt bis zum Zeitdeckel - war am 2026-09-15 die Ursache, und er sieht
+            // von innen aus wie ein zu knapp bemessener Deckel.
+            status = 0;
+            rumpf = ex.Message;
+        }
+
+        var dauer = (long)timeProvider.GetElapsedTime(start).TotalMilliseconds;
+
+        // Gekappt, weil eine entgleiste Antwort Megabytes haben kann und niemandem nutzt, der
+        // wissen will, WAS zurueckkam.
+        if (rumpf.Length > 2000)
+            rumpf = rumpf[..2000] + "\n… (gekürzt)";
+
+        return new GeminiProbeResult(status, dauer, einstellungen.Model, einstellungen.ThinkingLevel, rumpf);
+    }
 
     private static object ResponseSchema => new
     {

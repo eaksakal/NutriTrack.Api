@@ -1,10 +1,13 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using NutriTrack.Api.Contracts.Ai;
 using NutriTrack.Api.Services;
 using NutriTrack.Api.Tests.Infrastructure;
+using NutriTrack.Domain.Entities;
+using NutriTrack.Infrastructure.Data;
 
 namespace NutriTrack.Api.Tests;
 
@@ -476,5 +479,80 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
             [new ChatMessage { Role = "user", Text = "ein Apfel" }], string.Empty, CancellationToken.None);
 
         Assert.Null(Assert.Single(result.Items).SourceRef);
+    }
+
+    [Fact]
+    public async Task ParseAsync_UsesStoredSettingsInsteadOfConfiguration()
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var vorhandene = await db.AiSettings.SingleOrDefaultAsync();
+        if (vorhandene is not null)
+            db.AiSettings.Remove(vorhandene);
+        db.AiSettings.Add(new AiSettings
+        {
+            Id = 1, Model = "gemini-3.1-flash-lite", ThinkingLevel = "low",
+            MaxOutputTokens = 1234, UpdatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+        var provider = factory.Services.GetRequiredService<AiSettingsProvider>();
+        provider.Invalidate();
+
+        try
+        {
+            string? body = null;
+            factory.GeminiResponder = request =>
+            {
+                body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+                return StubGeminiHandler.Payload("""{"items":[]}""");
+            };
+
+            await Service().ParseAsync(
+                [new ChatMessage { Role = "user", Text = "ein Apfel" }], string.Empty, CancellationToken.None);
+
+            using var sent = JsonDocument.Parse(body!);
+            Assert.Equal("gemini-3.1-flash-lite", sent.RootElement.GetProperty("model").GetString());
+            var config = sent.RootElement.GetProperty("generation_config");
+            Assert.Equal("low", config.GetProperty("thinking_level").GetString());
+            Assert.Equal(1234, config.GetProperty("max_output_tokens").GetInt32());
+        }
+        finally
+        {
+            // Im finally, nicht nur am Ende: schlaegt eine Assertion oben fehl, bricht der Test
+            // sonst ab, bevor die Zeile entfernt und der Cache invalidiert wird. Die Klasse teilt
+            // Datenbank und AiSettingsProvider ueber IClassFixture - ohne Aufraeumen faellt jeder
+            // Folgetest, der die Vorgabewerte erwartet, mit derselben falschen Ursache um.
+            db.AiSettings.Remove(await db.AiSettings.SingleAsync());
+            await db.SaveChangesAsync();
+            provider.Invalidate();
+        }
+    }
+
+    [Fact]
+    public async Task ProbeAsync_ReturnsStatusDurationAndRawBody()
+    {
+        factory.GeminiResponder = _ => StubGeminiHandler.Payload("""{"items":[]}""");
+
+        var result = await Service().ProbeAsync(CancellationToken.None);
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.True(result.DurationMs >= 0);
+        Assert.Equal("gemini-3.6-flash", result.Model);
+        // Die Rohantwort, nicht der ausgepackte Text: bei einer Diagnose will man den Umschlag
+        // sehen, gerade wenn er nicht der erwartete ist.
+        Assert.Contains("model_output", result.RawBody);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_WithErrorStatus_ReportsItInsteadOfThrowing()
+    {
+        // Eine Probe, die bei einem 429 eine Ausnahme wirft, taugt nicht zur Diagnose: genau
+        // dieser Fall ist das, was der Betreiber sehen will.
+        factory.GeminiResponder = _ => StubGeminiHandler.InteractionsQuotaFailure();
+
+        var result = await Service().ProbeAsync(CancellationToken.None);
+
+        Assert.Equal(429, result.StatusCode);
+        Assert.Contains("quota", result.RawBody, StringComparison.OrdinalIgnoreCase);
     }
 }
