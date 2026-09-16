@@ -27,10 +27,34 @@ public class AiSettingsProvider(
     IConfiguration configuration,
     ILogger<AiSettingsProvider> logger)
 {
-    /// <summary>Gilt, wenn weder Datenbank noch Umgebung etwas sagen. Begruendung der Werte
-    /// steht bei ihrer Verwendung in GeminiService.</summary>
+    /// <summary>Gilt, wenn weder Datenbank noch Umgebung etwas sagen.</summary>
+
+    // NICHT auf gemini-3.5-flash zurueckstellen. Das Modell steht zwar weiterhin in
+    // /v1beta/models, ist ueber /v1beta/interactions aber tot: gemessen am 2026-09-15 vom
+    // Betriebsrechner schickt Google darauf ueber 50 s KEIN EINZIGES BYTE - kein 404, kein
+    // 400, nur Schweigen, bis der Zeitdeckel zuschlaegt. Derselbe Rumpf gegen
+    // gemini-3.6-flash: 200 nach 2,9 s. Das sah wie ein zu knapper Deckel aus und kostete
+    // zwei Erhoehungen (15 -> 25 -> 45 s), bevor jemand die Antwortzeit wirklich MASS.
+    // 3.7 und 3.8 scheiden aus: sie lehnen thinking_level=minimal ab.
     public const string DefaultModel = "gemini-3.6-flash";
+
+    // Gemessen am echten Dienst (gemini-3.5-flash, 2026-09-12, gleiche Eingabe):
+    //   Standard  8-15 s, 859 Denk-Token, 1185 Token gesamt  (riss den Zeitdeckel)
+    //   low        5,3 s, 637 Denk-Token,  843 Token gesamt
+    //   minimal    3,0 s,   0 Denk-Token,  210 Token gesamt
+    // Gleiche Qualitaet bei einem Fuenftel der Token - deshalb minimal. Konfigurierbar, weil
+    // nicht jedes Modell dieselben Stufen kennt (minimal/low/medium/high).
     public const string DefaultThinkingLevel = "minimal";
+
+    // OBERGRENZE FUER DIE AUSGABE. Ohne sie schreibt ein entgleistes Modell, bis der
+    // Zeitdeckel zuschlaegt. Am 2026-09-15 im Betrieb beobachtet: estimate.sugar kam mit
+    // ueber 9000 Ziffern zurueck (JsonException "too large for a Decimal"), und mehrere
+    // Anfragen liefen dabei in die vollen 45 s. Mit Deckel bricht derselbe Fall nach wenigen
+    // Sekunden ab - wichtig vor allem, weil der zweite Anlauf in AiMealAssistant sonst gar
+    // nicht mehr stattfindet: zwei Laeufe a 45 s sprengen jede Geduld.
+    // 4096 ist reichlich bemessen: eine normale Antwort mit zwei Posten misst rund 600 Token,
+    // die erlaubten 20 Posten liegen bei etwa 1700. Der Deckel soll Entgleisungen fangen,
+    // nicht lange Mahlzeiten.
     public const int DefaultMaxOutputTokens = 4096;
 
     private readonly object _gate = new();
