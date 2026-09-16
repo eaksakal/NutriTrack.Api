@@ -495,28 +495,37 @@ public class GeminiServiceTests(NutriTrackApiFactory factory) : IClassFixture<Nu
             MaxOutputTokens = 1234, UpdatedAt = DateTime.UtcNow
         });
         await db.SaveChangesAsync();
-        factory.Services.GetRequiredService<AiSettingsProvider>().Invalidate();
+        var provider = factory.Services.GetRequiredService<AiSettingsProvider>();
+        provider.Invalidate();
 
-        string? body = null;
-        factory.GeminiResponder = request =>
+        try
         {
-            body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
-            return StubGeminiHandler.Payload("""{"items":[]}""");
-        };
+            string? body = null;
+            factory.GeminiResponder = request =>
+            {
+                body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+                return StubGeminiHandler.Payload("""{"items":[]}""");
+            };
 
-        await Service().ParseAsync(
-            [new ChatMessage { Role = "user", Text = "ein Apfel" }], string.Empty, CancellationToken.None);
+            await Service().ParseAsync(
+                [new ChatMessage { Role = "user", Text = "ein Apfel" }], string.Empty, CancellationToken.None);
 
-        using var sent = JsonDocument.Parse(body!);
-        Assert.Equal("gemini-3.1-flash-lite", sent.RootElement.GetProperty("model").GetString());
-        var config = sent.RootElement.GetProperty("generation_config");
-        Assert.Equal("low", config.GetProperty("thinking_level").GetString());
-        Assert.Equal(1234, config.GetProperty("max_output_tokens").GetInt32());
-
-        // Aufraeumen, damit die uebrigen Tests dieser Klasse wieder die Konfiguration sehen.
-        db.AiSettings.Remove(await db.AiSettings.SingleAsync());
-        await db.SaveChangesAsync();
-        factory.Services.GetRequiredService<AiSettingsProvider>().Invalidate();
+            using var sent = JsonDocument.Parse(body!);
+            Assert.Equal("gemini-3.1-flash-lite", sent.RootElement.GetProperty("model").GetString());
+            var config = sent.RootElement.GetProperty("generation_config");
+            Assert.Equal("low", config.GetProperty("thinking_level").GetString());
+            Assert.Equal(1234, config.GetProperty("max_output_tokens").GetInt32());
+        }
+        finally
+        {
+            // Im finally, nicht nur am Ende: schlaegt eine Assertion oben fehl, bricht der Test
+            // sonst ab, bevor die Zeile entfernt und der Cache invalidiert wird. Die Klasse teilt
+            // Datenbank und AiSettingsProvider ueber IClassFixture - ohne Aufraeumen faellt jeder
+            // Folgetest, der die Vorgabewerte erwartet, mit derselben falschen Ursache um.
+            db.AiSettings.Remove(await db.AiSettings.SingleAsync());
+            await db.SaveChangesAsync();
+            provider.Invalidate();
+        }
     }
 
     [Fact]
