@@ -48,6 +48,25 @@ public class AiFailureLogTests(NutriTrackApiFactory factory) : IClassFixture<Nut
     }
 
     [Fact]
+    public async Task NetworkFailure_IsRecordedAsUnavailable()
+    {
+        await LeereAsync();
+        var (client, _, _) = await factory.CreateUserAsync();
+
+        // Keine TaskCanceledException: das ist der andere Zweig der Unterscheidung in
+        // AiEndpoints, die auf der inneren Ausnahme statt auf einem Wortabgleich beruht.
+        factory.GeminiResponder = _ => throw new HttpRequestException("Netzfehler im Test.");
+
+        await client.PostAsJsonAsync("/api/ai/parse-meal", new
+        {
+            messages = new[] { new { role = "user", text = "ein Apfel" } }
+        });
+
+        var eintrag = Assert.Single(await ProtokollAsync());
+        Assert.Equal("Unavailable", eintrag.Kind);
+    }
+
+    [Fact]
     public async Task MalformedResponse_IsRecordedAsSchema()
     {
         await LeereAsync();
@@ -92,7 +111,7 @@ public class AiFailureLogTests(NutriTrackApiFactory factory) : IClassFixture<Nut
         var recorder = scope.ServiceProvider.GetRequiredService<AiFailureRecorder>();
 
         for (var i = 0; i < AiFailureRecorder.MaxEntries + 5; i++)
-            await recorder.RecordAsync("Timeout", $"Fehlschlag {i}", 10, null, CancellationToken.None);
+            await recorder.RecordAsync("Timeout", $"Fehlschlag {i}", 10, null);
 
         var protokoll = await ProtokollAsync();
         Assert.Equal(AiFailureRecorder.MaxEntries, protokoll.Count);
@@ -109,7 +128,7 @@ public class AiFailureLogTests(NutriTrackApiFactory factory) : IClassFixture<Nut
         using var scope = factory.Services.CreateScope();
         var recorder = scope.ServiceProvider.GetRequiredService<AiFailureRecorder>();
 
-        await recorder.RecordAsync("Schema", new string('x', 900), 10, null, CancellationToken.None);
+        await recorder.RecordAsync("Schema", new string('x', 900), 10, null);
 
         var eintrag = Assert.Single(await ProtokollAsync());
         Assert.True(eintrag.Reason.Length <= 200);

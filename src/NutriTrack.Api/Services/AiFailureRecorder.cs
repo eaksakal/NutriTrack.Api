@@ -29,8 +29,15 @@ public class AiFailureRecorder(
 
     private const int MaxReasonLength = 200;
 
-    public async Task RecordAsync(
-        string kind, string reason, long durationMs, int? statusCode, CancellationToken ct)
+    /// <summary>
+    /// Kein <see cref="CancellationToken"/> vom Aufrufer: das waere hier falsch statt bloss
+    /// unnoetig. Der Fall, der das Protokoll am dringendsten sehen soll, ist genau der, bei dem
+    /// der Nutzer die Geduld verliert und mitten im 45-Sekunden-Zeitdeckel abbricht - stuenden
+    /// Schreiben und Kappen unter seinem Token, wuerde ausgerechnet dieser Zeitdeckel-Fehlschlag
+    /// nie im Protokoll landen. Die Schreibarbeit hier ist kurz und lokal (SQLite, keine
+    /// Fremddienste) und lohnt keinen eigenen Abbruchmechanismus.
+    /// </summary>
+    public async Task RecordAsync(string kind, string reason, long durationMs, int? statusCode)
     {
         var einstellungen = settingsProvider.Read();
 
@@ -48,7 +55,7 @@ public class AiFailureRecorder(
                 Reason = reason.Length > MaxReasonLength ? reason[..MaxReasonLength] : reason
             });
 
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesAsync(CancellationToken.None);
 
             // Erst schreiben, dann kappen: faellt das Kappen aus, ist der neue Eintrag trotzdem
             // da. Andersherum verloere man im Fehlerfall genau die Zeile, derentwegen jemand
@@ -57,11 +64,11 @@ public class AiFailureRecorder(
                 .OrderByDescending(f => f.OccurredAt)
                 .Skip(MaxEntries)
                 .Select(f => f.Id)
-                .ToListAsync(ct);
+                .ToListAsync(CancellationToken.None);
 
             if (zuViele.Count > 0)
             {
-                await db.AiFailures.Where(f => zuViele.Contains(f.Id)).ExecuteDeleteAsync(ct);
+                await db.AiFailures.Where(f => zuViele.Contains(f.Id)).ExecuteDeleteAsync(CancellationToken.None);
             }
         }
         catch (Exception ex)

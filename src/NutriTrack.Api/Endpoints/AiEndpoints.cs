@@ -52,12 +52,12 @@ public static class AiEndpoints
             }
             catch (GeminiQuotaException ex)
             {
-                await recorder.RecordAsync("Quota", ex.Message, uhr.ElapsedMilliseconds, 429, ct);
+                await recorder.RecordAsync("Quota", ex.Message, uhr.ElapsedMilliseconds, 429);
                 return AiQuotaResponse.From(ex, httpResponse);
             }
             catch (GeminiMalformedResponseException ex)
             {
-                await recorder.RecordAsync("Schema", ex.Message, uhr.ElapsedMilliseconds, null, ct);
+                await recorder.RecordAsync("Schema", ex.Message, uhr.ElapsedMilliseconds, null);
 
                 // Ein Wiederholungsversuch steckt bereits im Assistenten; kommt es hier an,
                 // hat auch der zweite Anlauf Unsinn geliefert.
@@ -69,11 +69,14 @@ public static class AiEndpoints
             catch (GeminiUnavailableException ex)
             {
                 // Zeitdeckel und Netzausfall sehen von aussen gleich aus, verlangen aber
-                // Verschiedenes: der eine ist eine Frage der Einstellung, der andere nicht.
-                var art = ex.Detail.Contains("rechtzeitig", StringComparison.OrdinalIgnoreCase)
-                    ? "Timeout"
-                    : "Unavailable";
-                await recorder.RecordAsync(art, ex.Detail, uhr.ElapsedMilliseconds, null, ct);
+                // Verschiedenes: der eine ist eine Frage der Einstellung, der andere nicht. Ein
+                // Wortabgleich auf ex.Detail waere zerbrechlich - aendert sich der Meldungstext
+                // in GeminiService (Tippfehler, Textpflege), verbuchte das ab da jeden Zeitdeckel
+                // still als Unavailable, ohne Warnung. Die innere Ausnahme ist das strukturelle
+                // Merkmal: GeminiService wirft bei einem Zeitdeckel eine TaskCanceledException,
+                // bei einem Netzfehler eine HttpRequestException (siehe GeminiService.SendAsync).
+                var art = ex.InnerException is TaskCanceledException ? "Timeout" : "Unavailable";
+                await recorder.RecordAsync(art, ex.Detail, uhr.ElapsedMilliseconds, null);
 
                 return AiFailureResponse.From(
                     ex,

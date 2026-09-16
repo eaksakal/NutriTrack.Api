@@ -138,8 +138,8 @@ public class AdminEndpointTests
         using (var scope = f.Services.CreateScope())
         {
             var recorder = scope.ServiceProvider.GetRequiredService<AiFailureRecorder>();
-            await recorder.RecordAsync("Timeout", "erster", 10, null, CancellationToken.None);
-            await recorder.RecordAsync("Schema", "zweiter", 20, null, CancellationToken.None);
+            await recorder.RecordAsync("Timeout", "erster", 10, null);
+            await recorder.RecordAsync("Schema", "zweiter", 20, null);
         }
 
         var json = await (await client.GetAsync("/api/admin/failures")).Content.ReadFromJsonAsync<JsonElement>();
