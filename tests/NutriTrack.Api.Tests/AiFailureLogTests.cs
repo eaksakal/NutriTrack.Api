@@ -53,9 +53,16 @@ public class AiFailureLogTests(NutriTrackApiFactory factory) : IClassFixture<Nut
         await LeereAsync();
         var (client, _, _) = await factory.CreateUserAsync();
 
-        // Keine TaskCanceledException: das ist der andere Zweig der Unterscheidung in
-        // AiEndpoints, die auf der inneren Ausnahme statt auf einem Wortabgleich beruht.
-        factory.GeminiResponder = _ => throw new HttpRequestException("Netzfehler im Test.");
+        // Das Wort "rechtzeitig" steckt hier ABSICHTLICH in einer HttpRequestException, nicht in
+        // einer TaskCanceledException: nur der Typ der inneren Ausnahme darf ueber Timeout vs.
+        // Unavailable entscheiden, nie der Wortlaut. Ein Test mit unauffaelligem Text bestuende
+        // auch unter der verworfenen Substring-Logik (Standardzweig ohne "rechtzeitig" ist
+        // ebenfalls "Unavailable") und bewiese damit nichts; dieser Text zieht Wortlaut und
+        // Ausnahmetyp bewusst auseinander und wird nur unter der neuen, typbasierten
+        // Unterscheidung richtig als "Unavailable" verbucht - unter der alten waere er faelschlich
+        // "Timeout" (ex.Detail haengt die Meldung der tiefsten inneren Ausnahme an, siehe
+        // GeminiUnavailableException.Detail, der Text schlaegt also durch).
+        factory.GeminiResponder = _ => throw new HttpRequestException("Verbindung nicht rechtzeitig aufgebaut.");
 
         await client.PostAsJsonAsync("/api/ai/parse-meal", new
         {
