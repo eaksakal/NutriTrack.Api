@@ -10,7 +10,9 @@ namespace NutriTrack.Api.Services;
 /// sie raetselt der Betreiber, warum sein Eintrag nicht wirkt.
 /// </summary>
 public sealed record AiSettingsSnapshot(
+    string Provider, bool ProviderFromDb,
     string Model, bool ModelFromDb,
+    string OpenRouterModel, bool OpenRouterModelFromDb,
     string ThinkingLevel, bool ThinkingLevelFromDb,
     int MaxOutputTokens, bool MaxOutputTokensFromDb);
 
@@ -57,6 +59,18 @@ public class AiSettingsProvider(
     // nicht lange Mahlzeiten.
     public const int DefaultMaxOutputTokens = 4096;
 
+    /// <summary>Ohne Eintrag bleibt alles beim Bisherigen. Ein zweiter Anbieter darf sich nicht
+    /// dadurch einschalten, dass jemand die Tabelle leert.</summary>
+    public const string DefaultProvider = IAiProvider.Gemini;
+
+    /// <summary>
+    /// Am 2026-09-16 gemessen: 34,9 s, Werte plausibel, Natrium korrekt in Gramm. Von den fuenf
+    /// kostenlosen Modellen mit erzwungenem Schema das einzige, das im Test vollstaendig
+    /// brauchbare Naehrwerte lieferte - dots-3-note-preview liess Natrium ganz weg,
+    /// nemotron-3-super war ueberlastet.
+    /// </summary>
+    public const string DefaultOpenRouterModel = "nex-agi/nex-n2.5-pro:free";
+
     private readonly object _gate = new();
     private AiSettings? _cached;
     private bool _geladen;
@@ -65,16 +79,33 @@ public class AiSettingsProvider(
     {
         var gespeichert = Gespeicherte();
 
+        var provider = Text(gespeichert?.Provider);
         var model = Text(gespeichert?.Model);
+        var openRouterModel = Text(gespeichert?.OpenRouterModel);
         var level = Text(gespeichert?.ThinkingLevel);
         var tokens = gespeichert?.MaxOutputTokens;
 
+        var providerWert = provider ?? (configuration["Ai:Provider"] is { Length: > 0 } p ? p : DefaultProvider);
+
+        // Ein verschriebener Name darf die Erfassung nicht lahmlegen. Der Rueckfall ist Gemini,
+        // und die Logzeile sagt warum - sonst sucht der Betreiber an der falschen Stelle.
+        if (providerWert != IAiProvider.Gemini && providerWert != IAiProvider.OpenRouter)
+        {
+            logger.LogWarning(
+                "Unbekannter KI-Anbieter {Provider}; es gilt {Fallback}.", providerWert, DefaultProvider);
+            providerWert = DefaultProvider;
+        }
+
         var modelWert = model ?? (configuration["Gemini:Model"] is { Length: > 0 } m ? m : DefaultModel);
+        var openRouterModelWert = openRouterModel
+            ?? (configuration["OpenRouter:Model"] is { Length: > 0 } o ? o : DefaultOpenRouterModel);
         var levelWert = level ?? (configuration["Gemini:ThinkingLevel"] is { Length: > 0 } l ? l : DefaultThinkingLevel);
         var tokenWert = tokens ?? configuration.GetValue("Gemini:MaxOutputTokens", DefaultMaxOutputTokens);
 
         return new AiSettingsSnapshot(
+            providerWert, provider is not null,
             modelWert, model is not null,
+            openRouterModelWert, openRouterModel is not null,
             levelWert, level is not null,
             tokenWert, tokens is not null);
     }
