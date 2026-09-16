@@ -36,6 +36,11 @@ public class AiSettingsStorageTests(NutriTrackApiFactory factory) : IClassFixtur
         Assert.Equal("gemini-3.6-flash", gelesen.Model);
         Assert.Equal("low", gelesen.ThinkingLevel);
         Assert.Equal(2048, gelesen.MaxOutputTokens);
+
+        // SQLite liefert DateTime ohne Kind zurueck. Ohne Konverter waere UpdatedAt nach dem
+        // Ruecklesen Unspecified, System.Text.Json serialisierte ohne "Z", und das Frontend
+        // laese den Wert als Lokalzeit - ein stiller Zeitversatz statt eines Fehlers.
+        Assert.Equal(DateTimeKind.Utc, gelesen.UpdatedAt.Kind);
     }
 
     [Fact]
@@ -85,5 +90,10 @@ public class AiSettingsStorageTests(NutriTrackApiFactory factory) : IClassFixtur
         Assert.Equal("Schema", gelesen.Kind);
         Assert.Equal(45000, gelesen.DurationMs);
         Assert.Contains("estimate.sugar", gelesen.Reason);
+
+        // Dieselbe Absicherung wie bei AiSettings.UpdatedAt: die Fehlerliste ist ein
+        // Diagnosewerkzeug, und eine um den Zeitzonenversatz verschobene Uhrzeit darin waere
+        // genau der stille Fehler, den SqliteConventions.UtcDateTime verhindert.
+        Assert.Equal(DateTimeKind.Utc, gelesen.OccurredAt.Kind);
     }
 }

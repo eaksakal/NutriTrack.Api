@@ -16,5 +16,10 @@ public class AiSettingsConfiguration : IEntityTypeConfiguration<AiSettings>
 
         builder.Property(s => s.Model).HasMaxLength(100);
         builder.Property(s => s.ThinkingLevel).HasMaxLength(20);
+
+        // Wie bei jeder anderen DateTime-Spalte des Bestands: SQLite liefert Kind=Unspecified
+        // zurueck, System.Text.Json schreibt das ohne "Z", und der Browser liest es als
+        // Lokalzeit. Begruendung in SqliteConventions.UtcDateTime.
+        builder.Property(s => s.UpdatedAt).HasConversion(SqliteConventions.UtcDateTime);
     }
 }

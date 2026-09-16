@@ -18,6 +18,11 @@ public class AiFailureConfiguration : IEntityTypeConfiguration<AiFailure>
         // beabsichtigt ist, und verhindert einen Ausnahmetext von Kilobytelaenge in der Datenbank.
         builder.Property(f => f.Reason).IsRequired().HasMaxLength(200);
 
+        // OHNE DIESEN KONVERTER zeigt die Fehlerliste eine um den Zeitzonenversatz verschobene
+        // Uhrzeit - in einem Werkzeug, dessen einziger Zweck die Diagnose ist. Begruendung in
+        // SqliteConventions.UtcDateTime.
+        builder.Property(f => f.OccurredAt).HasConversion(SqliteConventions.UtcDateTime);
+
         // Die Oberflaeche liest ausschliesslich "die juengsten 50", und der Ringpuffer loescht
         // nach derselben Ordnung. Ohne Index ist das bei jeder Schreiboperation ein Tabellenscan.
         builder.HasIndex(f => f.OccurredAt);
