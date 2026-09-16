@@ -235,6 +235,11 @@ public class AiSettingsConfiguration : IEntityTypeConfiguration<AiSettings>
 
         builder.Property(s => s.Model).HasMaxLength(100);
         builder.Property(s => s.ThinkingLevel).HasMaxLength(20);
+
+        // Wie bei jeder anderen DateTime-Spalte des Bestands: SQLite liefert Kind=Unspecified
+        // zurueck, System.Text.Json schreibt das ohne "Z", und der Browser liest es als
+        // Lokalzeit. Begruendung in SqliteConventions.UtcDateTime.
+        builder.Property(s => s.UpdatedAt).HasConversion(SqliteConventions.UtcDateTime);
     }
 }
 ```
@@ -261,6 +266,11 @@ public class AiFailureConfiguration : IEntityTypeConfiguration<AiFailure>
         // Die Kappung auf 200 passiert beim Schreiben; die Laenge hier haelt fest, dass sie
         // beabsichtigt ist, und verhindert einen Ausnahmetext von Kilobytelaenge in der Datenbank.
         builder.Property(f => f.Reason).IsRequired().HasMaxLength(200);
+
+        // OHNE DIESEN KONVERTER zeigt die Fehlerliste eine um den Zeitzonenversatz verschobene
+        // Uhrzeit - in einem Werkzeug, dessen einziger Zweck die Diagnose ist. Begruendung in
+        // SqliteConventions.UtcDateTime.
+        builder.Property(f => f.OccurredAt).HasConversion(SqliteConventions.UtcDateTime);
 
         // Die Oberflaeche liest ausschliesslich "die juengsten 50", und der Ringpuffer loescht
         // nach derselben Ordnung. Ohne Index ist das bei jeder Schreiboperation ein Tabellenscan.
