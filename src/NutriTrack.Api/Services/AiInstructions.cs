@@ -25,6 +25,15 @@ public static class AiInstructions
     // Die Grenze zwischen Nachfragen und Annehmen entscheidet, ob das Feature im Alltag taugt:
     // zu viele Rueckfragen sind laestiger als die bestehende Suche.
     //
+    // Seit 2026-09-17 liegt die Grenze bei der Mengenfrage ausdruecklich auf "schaetzen". Vorher
+    // verlangte der Prompt bei jeder unbestimmten Menge ("eine Hand voll", "ein Teller") eine
+    // Rueckfrage - gedacht gegen den Schaetzfehler von leicht 300 kcal. In der Praxis fragte die
+    // KI bei fast jeder gesprochenen Beschreibung zurueck, obwohl die Bestaetigungsmaske die
+    // Gramm ohnehin als Eingabefeld zeigt (AiEntryPage, Spalte "Menge (g)"): der Nutzer
+    // korrigiert dort genauer und schneller, als er die Rueckfrage beantworten koennte. Die
+    // Rueckfrage bleibt fuer den Fall, dass unklar ist, WAS gegessen wurde - das kann kein
+    // Eingabefeld nachholen.
+    //
     // Die Einheiten stehen hier AUSDRUECKLICH je Feld. Der Rest der Anwendung fuehrt Natrium in
     // GRAMM je 100 g (OpenFoodFacts-Feld sodium_100g, siehe MealEndpoints.CalcMicro); ein
     // Sprachmodell nennt Natrium von sich aus praktisch immer in Milligramm. Ohne diesen Satz
@@ -63,16 +72,21 @@ public static class AiInstructions
                          nicht 450. Teile einen in Milligramm gedachten Wert durch 1000.
         Rechne Haushaltsmasse um: eine Scheibe Kaese etwa 30 g, eine Tasse Kaffee etwa 200 ml,
         ein Broetchen etwa 60 g.
-        Fehlt eine Angabe, die den Naehrwert deutlich veraendert, stelle GENAU EINE kurze
-        Rueckfrage im Feld question und lasse items leer. Bei Kleinigkeiten nimm den ueblichen
-        Wert an, statt nachzufragen.
-        Ausdruecklich nachfragen musst du bei unbestimmten Mengenangaben zu einer vollstaendigen
-        Mahlzeit - "grosse Portion", "eine Schuessel", "ein Teller", "viel", "wenig". Bei diesen
-        Formulierungen liegen zwischen zwei plausiblen Annahmen leicht 300 kcal, und das ist die
-        groesste Fehlerquelle ueberhaupt. Eine Zahl zu raten, die der Nutzer in zwei Sekunden
-        haette nennen koennen, ist der schlechtere Weg.
-        Nenne in der Rueckfrage ruhig eine Groessenordnung zur Auswahl, damit sie leicht zu
-        beantworten ist.
+        Nach der MENGE fragst du NIE zurueck. Unbestimmte Angaben - "eine Hand voll", "eine
+        Schuessel", "ein Teller", "grosse Portion", "etwas", "viel", "wenig" - und auch eine
+        voellig fehlende Mengenangabe schaetzt du selbst auf eine uebliche Portion und traegst
+        sie in quantityInGrams ein. Der Nutzer bekommt deinen Vorschlag in einer Maske, in der
+        die Gramm in einem Eingabefeld stehen, und korrigiert sie dort in zwei Sekunden. Eine
+        Rueckfrage kostet ihn eine ganze Runde und bringt nichts, was das Feld nicht auch kann.
+        Anhaltspunkte: eine Hand voll etwa 30 g, eine Schuessel etwa 350 g, ein Teller einer
+        vollstaendigen Mahlzeit etwa 400 g, eine Portion Beilage etwa 200 g. "Klein" nimmst du
+        etwa ein Drittel darunter, "gross" etwa ein Drittel darueber.
+        Schreibe die Annahme in label mit dazu, damit der Nutzer sieht, was du angenommen hast:
+        "Erdnuesse (eine Hand voll)", "Chili con Carne (ein Teller)".
+        Eine Rueckfrage im Feld question - GENAU EINE kurze, items dann leer - stellst du nur,
+        wenn ohne sie gar nicht feststeht, WAS gegessen wurde: wenn die Beschreibung mehrere
+        voellig verschiedene Lebensmittel meinen kann oder unverstaendlich ist. Alles, was bloss
+        die Menge betrifft, schaetzt du.
         Steht ueber dem Gespraech ein Abschnitt "Bisher gegessen", dann ist das der Verlauf der
         letzten Tage, jede Zeile mit einer Kennung in eckigen Klammern. Bezieht sich der Nutzer auf
         eine dieser Zeilen ("das Eis von gestern", "nochmal das Fruehstueck", "den Rest davon"),
