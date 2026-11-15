@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # NutriTrack ausliefern: den Zielrechner auf den aktuellen Stand ziehen und den Dienst neu bauen.
 #
-# GEBAUT WIRD AM ZIEL. Kein Cross-Build, kein `docker save | ssh docker load` — der Laptop ist
-# x86_64 mit 8 GB und schafft den .NET-Build und `npm ci` selbst. Ebenso kein `sudo docker`:
-# der Betriebsbenutzer gehoert in die docker-Gruppe.
+# GEBAUT WIRD LOKAL (Vorgabe seit 2026-11-15), das Abbild geht per `docker save | ssh docker load`
+# zum Ziel. Frueher baute das Ziel selbst; am 2026-11-15 dauerte das ueber 15 Minuten, weil der
+# Laptop (8 GB) unter Immich-Last in den Swap geriet (Load 34, 96 % I/O-Wartezeit) und dabei auch
+# Immich und Nextcloud ausbremste. Der Entwicklerrechner baut dasselbe in einem Bruchteil der Zeit,
+# und beide sind linux/amd64 - ein Cross-Build ist es also nicht.
+# Gebaut wird aus `git archive HEAD` beider Repos, NICHT aus dem Arbeitsverzeichnis: so steckt im
+# Abbild genau der gepushte Stand, wie frueher beim Bau am Ziel - keine uncommitteten Aenderungen,
+# keine liegengebliebenen node_modules.
+# NUTRITRACK_BUILD=remote stellt den alten Weg wieder her (etwa ohne Docker auf diesem Rechner).
+# Kein `sudo docker`: der Betriebsbenutzer gehoert in die docker-Gruppe.
 #
 # WAS HIER ANDERS IST ALS BEI mbox: NutriTrack besteht aus ZWEI Repos (NutriTrack.Api und
 # NutriTrack.Web) in einem gemeinsamen Elternverzeichnis, weil der Docker-Kontext beide sehen
@@ -22,7 +29,17 @@
 #   NUTRITRACK_PORT=9082 scripts/deploy.sh          # veroeffentlichter Port, Default 8082
 #   NUTRITRACK_DATA_DIR=/srv/nutritrack scripts/deploy.sh   # Datenwurzel am Ziel,
 #                                                   # Default /home/eaksakal/nutritrack-data
+#   NUTRITRACK_BUILD=remote scripts/deploy.sh       # am Ziel bauen statt lokal
 set -euo pipefail
+
+BUILD="${NUTRITRACK_BUILD:-local}"
+if [ "$BUILD" != local ] && [ "$BUILD" != remote ]; then
+  echo "FEHLER: NUTRITRACK_BUILD muss local oder remote sein, nicht '$BUILD'." >&2
+  exit 1
+fi
+# Wird beim lokalen Bauen ins Bundle gebacken. Auf dem Ziel steht VITE_API_URL leer in der .env
+# (die SPA kommt vom selben Origin); hier dieselbe Vorgabe.
+VITE_API_URL="${NUTRITRACK_VITE_API_URL:-}"
 
 HOST="${NUTRITRACK_HOST:-eaksakal@192.168.188.96}"
 ROOT="${NUTRITRACK_ROOT:-/home/eaksakal/nutritrack}"
@@ -82,6 +99,13 @@ for repo in "$API_LOCAL" "$WEB_LOCAL"; do
   fi
   echo "    $name -> origin/$BRANCH"
   git -C "$repo" push origin "$BRANCH" 2>&1 | tail -1
+
+  # Lokal gebaut wird HEAD - das muss derselbe Stand sein, den das Ziel gleich aus origin/$BRANCH
+  # zieht, sonst laeuft ein Abbild neben einer compose-Datei aus einem anderen Stand.
+  if [ "$BUILD" = local ] && [ "$(git -C "$repo" rev-parse HEAD)" != "$(git -C "$repo" rev-parse "$BRANCH")" ]; then
+    echo "FEHLER: $name steht nicht auf $BRANCH. Lokales Bauen nimmt HEAD; erst wechseln." >&2
+    exit 1
+  fi
 done
 
 echo "==> [2/4] $HOST vorbereiten und auf origin/$BRANCH ziehen"
@@ -152,12 +176,40 @@ fi
 echo "    Datenwurzel      $DATA_DIR"
 REMOTE
 
-echo "==> [3/4] Bauen und starten (Version $APP_VERSION)"
-# APP_VERSION wird durchgereicht bis in die InformationalVersion des Abbilds; NUTRITRACK_PORT bildet,
-# falls gesetzt, in der compose-Datei das Host-Mapping. Alle uebrigen Werte zieht compose aus der
-# .env neben der compose-Datei auf dem Ziel.
-ssh -o BatchMode=yes "$HOST" \
-  "cd '$ROOT/NutriTrack.Api' && APP_VERSION='$APP_VERSION' ${PORT_ENV}${DATA_ENV}docker compose up -d --build"
+if [ "$BUILD" = local ]; then
+  echo "==> [3/4] Lokal bauen, uebertragen und starten (Version $APP_VERSION)"
+
+  KONTEXT="$(mktemp -d)"
+  trap 'rm -rf "$KONTEXT"' EXIT
+  mkdir -p "$KONTEXT/NutriTrack.Api" "$KONTEXT/NutriTrack.Web"
+  git -C "$API_LOCAL" archive HEAD | tar -x -C "$KONTEXT/NutriTrack.Api"
+  git -C "$WEB_LOCAL" archive HEAD | tar -x -C "$KONTEXT/NutriTrack.Web"
+  cp "$KONTEXT/NutriTrack.Api/.dockerignore" "$KONTEXT/.dockerignore"
+
+  # Dieselben Build-Argumente und derselbe Abbildname wie in der compose-Datei, damit
+  # `compose up --no-build` auf dem Ziel genau dieses Abbild nimmt.
+  docker build --platform linux/amd64 \
+    -f "$KONTEXT/NutriTrack.Api/Dockerfile" \
+    --build-arg APP_VERSION="$APP_VERSION" \
+    --build-arg VITE_API_URL="$VITE_API_URL" \
+    -t nutritrack:latest "$KONTEXT"
+
+  # gzip -1: im Heimnetz zaehlt die Rechenzeit mehr als die letzten Prozent Kompression.
+  echo "    Abbild uebertragen..."
+  docker save nutritrack:latest | gzip -1 | ssh -o BatchMode=yes "$HOST" "gunzip | docker load"
+
+  # --no-build: sonst baute compose wegen des build-Abschnitts am Ziel womoeglich doch wieder.
+  # up -d erkennt das neue Abbild und erzeugt den Container neu.
+  ssh -o BatchMode=yes "$HOST" \
+    "cd '$ROOT/NutriTrack.Api' && ${PORT_ENV}${DATA_ENV}docker compose up -d --no-build"
+else
+  echo "==> [3/4] Am Ziel bauen und starten (Version $APP_VERSION)"
+  # APP_VERSION wird durchgereicht bis in die InformationalVersion des Abbilds; NUTRITRACK_PORT
+  # bildet, falls gesetzt, in der compose-Datei das Host-Mapping. Alle uebrigen Werte zieht compose
+  # aus der .env neben der compose-Datei auf dem Ziel.
+  ssh -o BatchMode=yes "$HOST" \
+    "cd '$ROOT/NutriTrack.Api' && APP_VERSION='$APP_VERSION' ${PORT_ENV}${DATA_ENV}docker compose up -d --build"
+fi
 
 echo "==> [4/4] Nachsehen"
 ssh -o BatchMode=yes "$HOST" "cd '$ROOT/NutriTrack.Api' && ${PORT_ENV}${DATA_ENV}docker compose ps"
