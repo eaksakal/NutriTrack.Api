@@ -8,7 +8,8 @@
 #
 # ACHTUNG BEIM .dockerignore: BuildKit liest es aus der WURZEL DES KONTEXTS, nicht neben dem
 # Dockerfile. Die gepflegte Datei liegt im Api-Repo (NutriTrack.Api/.dockerignore); scripts/deploy.sh
-# kopiert sie vor dem Bauen nach /home/eaksakal/nutritrack/.dockerignore. Ohne diesen Schritt wandern
+# kopiert sie vor dem Bauen an die Wurzel des Kontexts (lokal: ein Temp-Verzeichnis aus
+# `git archive`; mit NUTRITRACK_BUILD=remote: /home/eaksakal/nutritrack). Ohne diesen Schritt wandern
 # node_modules und bin/obj beider Repos in den Kontext (Minuten statt Sekunden nur fuers Einlesen).
 
 # --- Stufe 1: Oberflaeche ---------------------------------------------------
@@ -45,7 +46,12 @@ COPY NutriTrack.Api/ .
 # KEIN PublishTrimmed: EF Core und ASP.NET Identity materialisieren ueber Reflection, der Trimmer
 # wirft dabei Typen weg, die erst zur Laufzeit gebraucht werden — der Fehler faellt dann beim
 # ersten Request auf, nicht beim Bauen. ReadyToRun bleibt, es verkuerzt nur den Warmstart.
-RUN dotnet publish src/NutriTrack.Api/NutriTrack.Api.csproj -c Release -a $TARGETARCH -o /app \
+# Cache-Mount fuer die NuGet-Pakete: COPY oben nimmt das ganze Repo, also faellt der Layer-Cache bei
+# jeder Codeaenderung, und ohne den Mount laedt der Restore jedes Mal alle Pakete neu - samt der
+# Laufzeit- und crossgen-Pakete fuer ReadyToRun. Am 2026-11-15 gemessen: 152 s fuer diesen Schritt,
+# fast ausschliesslich Download. Der Mount ueberlebt die Builds, landet aber nicht im Abbild.
+RUN --mount=type=cache,id=nutritrack-nuget,target=/root/.nuget/packages \
+    dotnet publish src/NutriTrack.Api/NutriTrack.Api.csproj -c Release -a $TARGETARCH -o /app \
     /p:PublishReadyToRun=true /p:InformationalVersion=$APP_VERSION
 
 # --- Stufe 3: Laufzeit ------------------------------------------------------

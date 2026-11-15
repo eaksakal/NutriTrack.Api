@@ -231,8 +231,7 @@ fi
 
 BASIS="http://$(echo "$HOST" | cut -d@ -f2):$PORT"
 echo -n "    /api/health: "
-# -m 20, weil der erste Start die SQLite-Datei anlegt und migriert; der Healthcheck des Containers
-# selbst ist mit 120 s Startfenster noch geduldiger als dieser eine Griff.
+# Der Healthcheck des Containers selbst ist mit 120 s Startfenster noch geduldiger als diese Schleife.
 # Wiederholt statt einmal: beim lokalen Bauen startet der Container Sekunden nach dem Laden, und
 # ein curl auf den noch geschlossenen Port bricht sofort ab statt die -m-Frist zu warten (am
 # 2026-11-15 so passiert, eine Sekunde nach dem Start - die App war gesund, das Skript meldete
