@@ -233,7 +233,19 @@ BASIS="http://$(echo "$HOST" | cut -d@ -f2):$PORT"
 echo -n "    /api/health: "
 # -m 20, weil der erste Start die SQLite-Datei anlegt und migriert; der Healthcheck des Containers
 # selbst ist mit 120 s Startfenster noch geduldiger als dieser eine Griff.
-curl -s -m 20 "$BASIS/api/health" || echo "(keine Antwort — docker compose logs -f nutritrack)"
+# Wiederholt statt einmal: beim lokalen Bauen startet der Container Sekunden nach dem Laden, und
+# ein curl auf den noch geschlossenen Port bricht sofort ab statt die -m-Frist zu warten (am
+# 2026-11-15 so passiert, eine Sekunde nach dem Start - die App war gesund, das Skript meldete
+# trotzdem "keine Antwort").
+GESUND=""
+for _ in $(seq 1 30); do
+  if GESUND="$(curl -s -f -m 5 "$BASIS/api/health")"; then
+    break
+  fi
+  GESUND=""
+  sleep 2
+done
+echo "${GESUND:-(keine Antwort nach 60 s — docker compose logs -f nutritrack)}"
 echo
 
 # /api/health sagt nichts ueber die KI-Erfassung: sie haengt an einem fremden Dienst, dessen
