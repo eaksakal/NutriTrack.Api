@@ -142,6 +142,24 @@ builder.Services.AddHttpClient<OpenRouterService>(client =>
     client.Timeout = TimeSpan.FromSeconds(seconds);
 });
 
+builder.Services.AddHttpClient<OllamaService>(client =>
+{
+    // 75 s: das erste Laden von qwen2.5:14b nach dem Einschalten des PCs dauerte am 2026-11-15
+    // rund 50 s, danach antwortet das Modell in 3 bis 6 s. Der Deckel muss das Laden tragen -
+    // sonst faellt genau die erste Anfrage des Tages auf OpenRouter, und die naechste auch, weil
+    // Ollama das Laden beim Abbruch nicht zu Ende bringt.
+    var seconds = builder.Configuration.GetValue("Ollama:TimeoutSeconds", 75);
+    client.Timeout = TimeSpan.FromSeconds(seconds);
+})
+.ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+{
+    // Der eigentliche Grund fuer einen eigenen Handler: ist der PC aus, antwortet im Heimnetz
+    // niemand auf den Verbindungsaufbau, und ohne diesen Deckel wartete die Kette den vollen
+    // Zeitdeckel ab, bevor sie zu OpenRouter weitergeht. Ein laufender PC nimmt die Verbindung
+    // im Millisekundenbereich an.
+    ConnectTimeout = TimeSpan.FromSeconds(builder.Configuration.GetValue("Ollama:ConnectTimeoutSeconds", 3)),
+});
+
 // decimal ist unter SQLite nicht nativ; die Spalten sind in den Entity-Konfigurationen
 // bewusst als TEXT deklariert (Begruendung in SqliteConventions). Eine ConfigureWarnings-
 // Unterdrueckung ist dafuer nicht noetig: die frueheren Provider-Versionen warnten hier bei

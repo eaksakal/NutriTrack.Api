@@ -55,6 +55,27 @@ public class AiProviderFactoryTests(NutriTrackApiFactory factory) : IClassFixtur
         }
     }
 
+    [Theory]
+    [InlineData(null, new[] { "gemini" })]
+    [InlineData("openrouter", new[] { "openrouter", "gemini" })]
+    [InlineData("ollama", new[] { "ollama", "openrouter", "gemini" })]
+    public async Task Current_ChainRunsFromTheSelectedProviderBackwards(string? provider, string[] erwartet)
+    {
+        await SetzeAnbieterAsync(provider);
+        try
+        {
+            factory.CreateClient();
+            using var scope = factory.Services.CreateScope();
+            var kette = scope.ServiceProvider.GetRequiredService<AiProviderFactory>().Current();
+
+            Assert.Equal(erwartet, kette.Active.Select(p => p.Name));
+        }
+        finally
+        {
+            await SetzeAnbieterAsync(null);
+        }
+    }
+
     [Fact]
     public async Task Current_ChangesWithoutRestart()
     {

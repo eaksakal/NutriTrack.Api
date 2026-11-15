@@ -13,6 +13,7 @@ public sealed record AiSettingsSnapshot(
     string Provider, bool ProviderFromDb,
     string Model, bool ModelFromDb,
     string OpenRouterModel, bool OpenRouterModelFromDb,
+    string OllamaModel, bool OllamaModelFromDb,
     string ThinkingLevel, bool ThinkingLevelFromDb,
     int MaxOutputTokens, bool MaxOutputTokensFromDb);
 
@@ -71,6 +72,13 @@ public class AiSettingsProvider(
     /// </summary>
     public const string DefaultOpenRouterModel = "nex-agi/nex-n2.5-pro:free";
 
+    /// <summary>
+    /// Am 2026-11-15 gegen qwen3:8b verglichen (zehn Testeingaben, echte Systemanweisung):
+    /// etwas langsamer (4,2 statt 2,6 s), aber ohne die groben Mengenfehler von qwen3:8b.
+    /// Begruendung ausfuehrlich in OllamaService.
+    /// </summary>
+    public const string DefaultOllamaModel = "qwen2.5:14b";
+
     private readonly object _gate = new();
     private AiSettings? _cached;
     private bool _geladen;
@@ -82,6 +90,7 @@ public class AiSettingsProvider(
         var provider = Text(gespeichert?.Provider);
         var model = Text(gespeichert?.Model);
         var openRouterModel = Text(gespeichert?.OpenRouterModel);
+        var ollamaModel = Text(gespeichert?.OllamaModel);
         var level = Text(gespeichert?.ThinkingLevel);
         var tokens = gespeichert?.MaxOutputTokens;
 
@@ -89,7 +98,7 @@ public class AiSettingsProvider(
 
         // Ein verschriebener Name darf die Erfassung nicht lahmlegen. Der Rueckfall ist Gemini,
         // und die Logzeile sagt warum - sonst sucht der Betreiber an der falschen Stelle.
-        if (providerWert != IAiProvider.Gemini && providerWert != IAiProvider.OpenRouter)
+        if (!IAiProvider.All.Contains(providerWert))
         {
             logger.LogWarning(
                 "Unbekannter KI-Anbieter {Provider}; es gilt {Fallback}.", providerWert, DefaultProvider);
@@ -99,6 +108,8 @@ public class AiSettingsProvider(
         var modelWert = model ?? (configuration["Gemini:Model"] is { Length: > 0 } m ? m : DefaultModel);
         var openRouterModelWert = openRouterModel
             ?? (configuration["OpenRouter:Model"] is { Length: > 0 } o ? o : DefaultOpenRouterModel);
+        var ollamaModelWert = ollamaModel
+            ?? (configuration["Ollama:Model"] is { Length: > 0 } om ? om : DefaultOllamaModel);
         var levelWert = level ?? (configuration["Gemini:ThinkingLevel"] is { Length: > 0 } l ? l : DefaultThinkingLevel);
         var tokenWert = tokens ?? configuration.GetValue("Gemini:MaxOutputTokens", DefaultMaxOutputTokens);
 
@@ -106,6 +117,7 @@ public class AiSettingsProvider(
             providerWert, provider is not null,
             modelWert, model is not null,
             openRouterModelWert, openRouterModel is not null,
+            ollamaModelWert, ollamaModel is not null,
             levelWert, level is not null,
             tokenWert, tokens is not null);
     }

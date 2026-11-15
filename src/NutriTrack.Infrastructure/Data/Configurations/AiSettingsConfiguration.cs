@@ -22,6 +22,7 @@ public class AiSettingsConfiguration : IEntityTypeConfiguration<AiSettings>
         // Laenger als Geminis Modellnamen: OpenRouter stellt den Anbieter voran
         // ("nex-agi/nex-n2.5-pro:free").
         builder.Property(s => s.OpenRouterModel).HasMaxLength(150);
+        builder.Property(s => s.OllamaModel).HasMaxLength(150);
 
         // Wie bei jeder anderen DateTime-Spalte des Bestands: SQLite liefert Kind=Unspecified
         // zurueck, System.Text.Json schreibt das ohne "Z", und der Browser liest es als

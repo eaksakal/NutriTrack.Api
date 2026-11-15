@@ -145,6 +145,26 @@ public class AdminEndpointTests
     }
 
     [Fact]
+    public async Task Put_AcceptsOllamaWithItsOwnModel()
+    {
+        using var f = new AdminFactory("chef@example.com");
+        await f.ResetDatabaseAsync();
+        var (client, _, _) = await f.CreateUserAsync("chef@example.com");
+
+        var vorher = await (await client.GetAsync("/api/admin/settings")).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(AiSettingsProvider.DefaultOllamaModel, vorher.GetProperty("ollamaModel").GetString());
+        Assert.False(vorher.GetProperty("ollamaModelFromDatabase").GetBoolean());
+
+        var ok = await client.PutAsJsonAsync("/api/admin/settings", new { provider = "ollama", ollamaModel = "qwen3:8b" });
+        ok.EnsureSuccessStatusCode();
+
+        var json = await (await client.GetAsync("/api/admin/settings")).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ollama", json.GetProperty("provider").GetString());
+        Assert.Equal("qwen3:8b", json.GetProperty("ollamaModel").GetString());
+        Assert.True(json.GetProperty("ollamaModelFromDatabase").GetBoolean());
+    }
+
+    [Fact]
     public async Task Probe_CallsGeminiOnceAndReportsResult()
     {
         using var f = new AdminFactory("chef@example.com");

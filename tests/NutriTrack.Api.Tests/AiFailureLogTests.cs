@@ -238,6 +238,12 @@ public class AiFailureLogTests(AiFailureLogTests.AdminCapableFactory factory)
         {
             factory.OpenRouterResponder = _ => throw new TaskCanceledException("Zeitdeckel im Test.");
 
+            // Seit der Rueckfallkette antwortet nach OpenRouter noch Gemini. Ausdruecklich
+            // erfolgreich gesetzt, weil sich die Tests dieser Klasse eine Factory teilen und ein
+            // vorher gesetzter Gemini-Fehlschlag sonst einen zweiten Eintrag erzeugte. Der
+            // OpenRouter-Ausfall landet trotzdem im Protokoll - eingetragen von der Kette.
+            factory.GeminiResponder = _ => StubGeminiHandler.Payload("""{"items":[]}""");
+
             await client.PostAsJsonAsync("/api/ai/parse-meal", new
             {
                 messages = new[] { new { role = "user", text = "ein Apfel" } }
@@ -253,6 +259,7 @@ public class AiFailureLogTests(AiFailureLogTests.AdminCapableFactory factory)
 
             var eintrag = Assert.Single(eintraege.EnumerateArray());
             Assert.Equal("openrouter", eintrag.GetProperty("provider").GetString());
+            Assert.StartsWith("Ausweichen auf gemini", eintrag.GetProperty("reason").GetString());
 
             // Abschluss-Review Befund 2: vor dem Fix stand hier IMMER Geminis Modell und dessen
             // Denkstufe, egal welcher Anbieter tatsaechlich ausgefallen war. Ein Test, der nur den

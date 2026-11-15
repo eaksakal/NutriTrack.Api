@@ -18,6 +18,9 @@ public class AiSettingsResponse
     public string OpenRouterModel { get; set; } = string.Empty;
     public bool OpenRouterModelFromDatabase { get; set; }
 
+    public string OllamaModel { get; set; } = string.Empty;
+    public bool OllamaModelFromDatabase { get; set; }
+
     public string ThinkingLevel { get; set; } = string.Empty;
     public bool ThinkingLevelFromDatabase { get; set; }
 
@@ -33,6 +36,7 @@ public class UpdateAiSettingsRequest
     public string? Provider { get; set; }
     public string? Model { get; set; }
     public string? OpenRouterModel { get; set; }
+    public string? OllamaModel { get; set; }
     public string? ThinkingLevel { get; set; }
     public int? MaxOutputTokens { get; set; }
 }
@@ -43,7 +47,7 @@ public class AiProbeResponse
     public long DurationMs { get; set; }
     public string Model { get; set; } = string.Empty;
 
-    /// <summary>Null bei einem Anbieter ohne Denkstufe (OpenRouter). Kein Platzhalter wie ""
+    /// <summary>Null bei einem Anbieter ohne Denkstufe (OpenRouter, Ollama). Kein Platzhalter wie ""
     /// oder "-": der wuerde eine Einstellung behaupten, die es dort nicht gibt.</summary>
     public string? ThinkingLevel { get; set; }
 
@@ -61,7 +65,7 @@ public class AiFailureLogEntry
     public DateTime OccurredAt { get; set; }
     public string Kind { get; set; } = string.Empty;
 
-    /// <summary>"gemini" oder "openrouter", zum Zeitpunkt des Fehlschlags. Ohne dieses Feld steht
+    /// <summary>"gemini", "openrouter" oder "ollama" - der ausgefallene Anbieter. Ohne dieses Feld steht
     /// nach einem Wechsel nicht mehr fest, welcher Dienst welchen Fehlschlag verursacht hat.</summary>
     public string? Provider { get; set; }
 

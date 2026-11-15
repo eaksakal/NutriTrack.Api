@@ -30,7 +30,6 @@ public static class GoalsEndpoints
         // nachdem der Nutzer die Zahlen gesehen hat - dasselbe Muster wie bei den Mahlzeiten.
         group.MapPost("/suggest", async (
             SuggestGoalsRequest request,
-            IConfiguration configuration,
             AiProviderFactory providerFactory,
             ClaimsPrincipal user,
             AiRateLimiter limiter,
@@ -80,10 +79,9 @@ public static class GoalsEndpoints
             // AdminEndpoints): sonst wuerde bei gewaehltem OpenRouter ein fehlender
             // Gemini:ApiKey die Deutung still uebergehen, obwohl OpenRouter einsatzbereit waere -
             // oder umgekehrt ein vorhandener Gemini:ApiKey den Aufruf ankuendigen, obwohl der
-            // tatsaechlich benutzte OpenRouter-Schluessel fehlt.
-            var apiKeySetting = provider.ApiKeySetting;
-            if (!string.IsNullOrWhiteSpace(request.Wish)
-                && !string.IsNullOrWhiteSpace(configuration[apiKeySetting]))
+            // tatsaechlich benutzte OpenRouter-Schluessel fehlt. Mit der Rueckfallkette genuegt
+            // ein eingerichtetes Glied.
+            if (!string.IsNullOrWhiteSpace(request.Wish) && provider.MissingSetting is null)
             {
                 var userId = user.FindFirst(ClaimTypes.NameIdentifier)!.Value;
                 if (!limiter.TryAcquire(userId))
@@ -117,12 +115,12 @@ public static class GoalsEndpoints
                 }
                 catch (AiQuotaException ex)
                 {
-                    await recorder.RecordAsync("Quota", ex.Message, uhr.ElapsedMilliseconds, 429);
+                    await recorder.RecordAsync("Quota", ex.Message, uhr.ElapsedMilliseconds, 429, ex.Provider);
                     return AiQuotaResponse.From(ex, httpResponse);
                 }
                 catch (AiMalformedResponseException ex)
                 {
-                    await recorder.RecordAsync("Schema", ex.Message, uhr.ElapsedMilliseconds, null);
+                    await recorder.RecordAsync("Schema", ex.Message, uhr.ElapsedMilliseconds, null, ex.Provider);
                     return AiFailureResponse.From(
                         ex,
                         "Die KI ist gerade nicht erreichbar. Du kannst die Ziele von Hand eintragen.",
@@ -134,7 +132,7 @@ public static class GoalsEndpoints
                     // entscheidet ueber Timeout vs. Unavailable, nie ein Wortabgleich auf
                     // ex.Detail (Begruendung dort).
                     var art = ex.InnerException is TaskCanceledException ? "Timeout" : "Unavailable";
-                    await recorder.RecordAsync(art, ex.Detail, uhr.ElapsedMilliseconds, null);
+                    await recorder.RecordAsync(art, ex.Detail, uhr.ElapsedMilliseconds, null, ex.Provider);
 
                     return AiFailureResponse.From(
                         ex,

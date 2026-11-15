@@ -39,10 +39,9 @@ public static class AdminEndpoints
             // Rueckfall in AiSettingsProvider.Read() faengt ihn zwar auch ab, aber wer ihn ueber
             // die Oberflaeche eintraegt, soll es sofort erfahren statt spaeter zu raetseln, warum
             // die Wahl nicht greift.
-            if (request.Provider is { Length: > 0 } gewaehlt
-                && gewaehlt != IAiProvider.Gemini && gewaehlt != IAiProvider.OpenRouter)
+            if (request.Provider is { Length: > 0 } gewaehlt && !IAiProvider.All.Contains(gewaehlt))
             {
-                return Results.BadRequest(new { Error = "Anbieter muss \"gemini\" oder \"openrouter\" sein." });
+                return Results.BadRequest(new { Error = "Anbieter muss \"ollama\", \"openrouter\" oder \"gemini\" sein." });
             }
 
             var zeile = await db.AiSettings.SingleOrDefaultAsync(ct);
@@ -57,6 +56,7 @@ public static class AdminEndpoints
             zeile.Provider = Leer(request.Provider);
             zeile.Model = Leer(request.Model);
             zeile.OpenRouterModel = Leer(request.OpenRouterModel);
+            zeile.OllamaModel = Leer(request.OllamaModel);
             zeile.ThinkingLevel = Leer(request.ThinkingLevel);
             zeile.MaxOutputTokens = request.MaxOutputTokens;
             zeile.UpdatedAt = DateTime.UtcNow;
@@ -80,7 +80,9 @@ public static class AdminEndpoints
             if (!IstAdmin(user, configuration))
                 return Results.NotFound();
 
-            var provider = providerFactory.Current();
+            // Die Probe gilt dem EINGESTELLTEN Anbieter, nicht der Rueckfallkette (Begruendung an
+            // AiProviderChain.ProbeAsync) - also auch dessen Einrichtung pruefen, nicht die der Kette.
+            var provider = providerFactory.Current().Selected;
 
             // Fehlender Schluessel ist die wahrscheinlichste Fehlkonfiguration ueberhaupt, und
             // ausgerechnet dafuer sagte die Probe bisher nichts Brauchbares: ohne diese Pruefung
@@ -91,10 +93,9 @@ public static class AdminEndpoints
             // Kommentar an TryAcquire unten).
             // Welcher Schluessel gemeint ist, haengt am GEWAEHLTEN Anbieter: eine Probe, die wegen
             // des falschen Schluessels 503 meldet, waere schlimmer als gar keine Pruefung.
-            var apiKeySetting = provider.ApiKeySetting;
-            if (string.IsNullOrWhiteSpace(configuration[apiKeySetting]))
+            if (provider.MissingSetting is { } fehlt)
                 return Results.Json(
-                    new { Error = $"Verbindungstest ist nicht möglich ({apiKeySetting} fehlt)." },
+                    new { Error = $"Verbindungstest ist nicht möglich ({fehlt} fehlt)." },
                     statusCode: StatusCodes.Status503ServiceUnavailable);
 
             var userId = user.FindFirst(ClaimTypes.NameIdentifier)!.Value;
@@ -173,6 +174,8 @@ public static class AdminEndpoints
             ModelFromDatabase = s.ModelFromDb,
             OpenRouterModel = s.OpenRouterModel,
             OpenRouterModelFromDatabase = s.OpenRouterModelFromDb,
+            OllamaModel = s.OllamaModel,
+            OllamaModelFromDatabase = s.OllamaModelFromDb,
             ThinkingLevel = s.ThinkingLevel,
             ThinkingLevelFromDatabase = s.ThinkingLevelFromDb,
             MaxOutputTokens = s.MaxOutputTokens,

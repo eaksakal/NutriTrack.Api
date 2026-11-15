@@ -54,6 +54,11 @@ public class NutriTrackApiFactory : WebApplicationFactory<AuthResponse>, IAsyncL
     public Func<HttpRequestMessage, HttpResponseMessage> OpenRouterResponder { get; set; } =
         _ => StubOpenRouterHandler.Payload("""{"items":[]}""");
 
+    /// <summary>Antwortverhalten des Ollama-Stubs. Ollama spricht denselben OpenAI-Dialekt wie
+    /// OpenRouter, deshalb derselbe Stub-Handler.</summary>
+    public Func<HttpRequestMessage, HttpResponseMessage> OllamaResponder { get; set; } =
+        _ => StubOpenRouterHandler.Payload("""{"items":[]}""");
+
     /// <summary>Null bedeutet: normales Stub-Verhalten. Gesetzt: diese Antwort fuer jede Anfrage.</summary>
     public Func<HttpRequestMessage, HttpResponseMessage?>? OpenFoodFactsResponder { get; set; }
 
@@ -71,6 +76,7 @@ public class NutriTrackApiFactory : WebApplicationFactory<AuthResponse>, IAsyncL
         builder.UseSetting("Gemini:ApiKey", "test-key");
         builder.UseSetting("Gemini:Model", "gemini-3.6-flash");
         builder.UseSetting("OpenRouter:ApiKey", "test-openrouter-key");
+        builder.UseSetting("Ollama:BaseUrl", "http://ollama.test:11434");
 
         builder.ConfigureTestServices(services =>
         {
@@ -87,6 +93,9 @@ public class NutriTrackApiFactory : WebApplicationFactory<AuthResponse>, IAsyncL
 
             services.AddHttpClient<OpenRouterService>()
                 .ConfigurePrimaryHttpMessageHandler(() => new StubOpenRouterHandler(request => OpenRouterResponder(request)));
+
+            services.AddHttpClient<OllamaService>()
+                .ConfigurePrimaryHttpMessageHandler(() => new StubOpenRouterHandler(request => OllamaResponder(request)));
         });
     }
 

@@ -12,7 +12,6 @@ public static class AiEndpoints
 
         group.MapPost("/parse-meal", async (
             ParseMealRequest request,
-            IConfiguration configuration,
             AiProviderFactory providerFactory,
             AiMealAssistant assistant,
             ClaimsPrincipal user,
@@ -31,10 +30,11 @@ public static class AiEndpoints
             // meldete diese Kernfunktion bei gewaehltem OpenRouter immer 503 wegen des fehlenden
             // Gemini:ApiKey, obwohl OpenRouter einsatzbereit waere - der Grund, warum dieser
             // Branch fuer genau die Konfiguration, fuer die es ihn gibt, tot war.
+            // Mit der Rueckfallkette heisst "eingerichtet": mindestens ein Glied ist es.
             var provider = providerFactory.Current();
-            if (string.IsNullOrWhiteSpace(configuration[provider.ApiKeySetting]))
+            if (provider.MissingSetting is { } fehlt)
                 return Results.Json(
-                    new { Error = $"KI-Erfassung ist nicht eingerichtet ({provider.ApiKeySetting} fehlt)." },
+                    new { Error = $"KI-Erfassung ist nicht eingerichtet ({fehlt} fehlt)." },
                     statusCode: StatusCodes.Status503ServiceUnavailable);
 
             // Die Grenzpruefungen stehen vor dem Zaehler und vor dem Gemini-Aufruf: eine Eingabe,
@@ -59,12 +59,12 @@ public static class AiEndpoints
             }
             catch (AiQuotaException ex)
             {
-                await recorder.RecordAsync("Quota", ex.Message, uhr.ElapsedMilliseconds, 429);
+                await recorder.RecordAsync("Quota", ex.Message, uhr.ElapsedMilliseconds, 429, ex.Provider);
                 return AiQuotaResponse.From(ex, httpResponse);
             }
             catch (AiMalformedResponseException ex)
             {
-                await recorder.RecordAsync("Schema", ex.Message, uhr.ElapsedMilliseconds, null);
+                await recorder.RecordAsync("Schema", ex.Message, uhr.ElapsedMilliseconds, null, ex.Provider);
 
                 // Ein Wiederholungsversuch steckt bereits im Assistenten; kommt es hier an,
                 // hat auch der zweite Anlauf Unsinn geliefert.
@@ -83,7 +83,7 @@ public static class AiEndpoints
                 // Merkmal: GeminiService wirft bei einem Zeitdeckel eine TaskCanceledException,
                 // bei einem Netzfehler eine HttpRequestException (siehe GeminiService.SendAsync).
                 var art = ex.InnerException is TaskCanceledException ? "Timeout" : "Unavailable";
-                await recorder.RecordAsync(art, ex.Detail, uhr.ElapsedMilliseconds, null);
+                await recorder.RecordAsync(art, ex.Detail, uhr.ElapsedMilliseconds, null, ex.Provider);
 
                 return AiFailureResponse.From(
                     ex,

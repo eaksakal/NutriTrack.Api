@@ -18,7 +18,7 @@ public class AiSettings
     public int? MaxOutputTokens { get; set; }
 
     /// <summary>
-    /// "gemini" oder "openrouter". Null heisst wie bei den uebrigen Feldern "nimm die
+    /// "gemini", "openrouter" oder "ollama". Null heisst wie bei den uebrigen Feldern "nimm die
     /// Umgebungsvariable", und die steht ohne Eintrag auf Gemini.
     /// </summary>
     public string? Provider { get; set; }
@@ -29,6 +29,10 @@ public class AiSettings
     /// genutzte Wert des anderen Anbieters waere weg.
     /// </summary>
     public string? OpenRouterModel { get; set; }
+
+    /// <summary>Das Modell FUER OLLAMA - aus demselben Grund getrennt wie
+    /// <see cref="OpenRouterModel"/>.</summary>
+    public string? OllamaModel { get; set; }
 
     public DateTime UpdatedAt { get; set; }
 }
