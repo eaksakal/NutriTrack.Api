@@ -8,8 +8,22 @@ using NutriTrack.Api.Contracts.Ai;
 
 namespace NutriTrack.Api.Services;
 
+/// <summary>
+/// Gemeinsame Wurzel der drei KI-Fehlschlaege. Es gibt sie wegen der Rueckfallkette
+/// (AiProviderChain): der Fehlschlag, der beim Endpunkt ankommt, stammt nicht zwingend vom
+/// eingestellten Anbieter, sondern vom LETZTEN der Kette. Ohne <see cref="Provider"/> schriebe das
+/// Fehlerprotokoll den eingestellten Namen mit - bei "ollama" also Ollama, obwohl am Ende Gemini
+/// ausgefallen ist.
+/// </summary>
+public abstract class AiException(string message, Exception? inner = null) : Exception(message, inner)
+{
+    /// <summary>Name des Anbieters, der diesen Fehlschlag verursacht hat. Setzt die Kette; null
+    /// heisst "unbekannt", dann gilt der eingestellte.</summary>
+    public string? Provider { get; set; }
+}
+
 /// <summary>Der Anbieter ist erreichbar, aber nicht nutzbar (Timeout, Netz, 5xx).</summary>
-public class AiUnavailableException(string message, Exception? inner = null) : Exception(message, inner)
+public class AiUnavailableException(string message, Exception? inner = null) : AiException(message, inner)
 {
     /// <summary>
     /// Der Grund in einem Satz, samt der tiefsten Ursache. Zeitdeckel, ein 500 vom Anbieter und ein
@@ -48,7 +62,7 @@ public enum AiQuotaScope
 public class AiQuotaException(
     string message,
     AiQuotaScope scope = AiQuotaScope.Unknown,
-    TimeSpan? retryAfter = null) : Exception(message)
+    TimeSpan? retryAfter = null) : AiException(message)
 {
     public AiQuotaScope Scope { get; } = scope;
 
@@ -57,7 +71,7 @@ public class AiQuotaException(
 }
 
 /// <summary>Antwort kam an, passt aber nicht zum erzwungenen Schema.</summary>
-public class AiMalformedResponseException(string message) : Exception(message);
+public class AiMalformedResponseException(string message) : AiException(message);
 
 /// <summary>Wie ein Zielwunsch in Worten zu lesen ist. Mehr braucht der Rechner nicht.</summary>
 public class AiWishResult
@@ -139,7 +153,8 @@ public class GeminiService(
 {
     public string Name => IAiProvider.Gemini;
 
-    public string ApiKeySetting => "Gemini:ApiKey";
+    public string? MissingSetting =>
+        string.IsNullOrWhiteSpace(configuration["Gemini:ApiKey"]) ? "Gemini:ApiKey" : null;
 
     private const string Endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions";
 

@@ -92,13 +92,23 @@ services:
       # Deckel fuer EINEN Gemini-Aufruf. Hier durchgereicht, damit ein Timeout im Betrieb ohne
       # Neubau nachgestellt werden kann - die Antwortzeit haengt an Googles Last, nicht an uns.
       - Gemini__TimeoutSeconds=${NUTRITRACK_GEMINI_TIMEOUT:-45}
-      # Welcher KI-Anbieter gilt: gemini oder openrouter. Umschaltbar auch in der Verwaltung
-      # unter /admin; dieser Wert ist der Rueckfall und die Notbremse.
+      # Welcher KI-Anbieter gilt: ollama, openrouter oder gemini. Umschaltbar auch in der
+      # Verwaltung unter /admin; dieser Wert ist der Rueckfall und die Notbremse. Faellt der
+      # eingestellte aus, antwortet der naechste eingerichtete in der Reihe
+      # ollama -> openrouter -> gemini (AiProviderChain); nach vorne geht es nie.
       - Ai__Provider=${NUTRITRACK_AI_PROVIDER:-gemini}
       - OpenRouter__ApiKey=${NUTRITRACK_OPENROUTER_KEY:-}
       - OpenRouter__Model=${NUTRITRACK_OPENROUTER_MODEL:-nex-agi/nex-n2.5-pro:free}
       # 90 s statt Geminis 45: die kostenlosen Modelle brauchten gemessene 24 bis 35 Sekunden.
       - OpenRouter__TimeoutSeconds=${NUTRITRACK_OPENROUTER_TIMEOUT:-90}
+      # Ollama auf dem Gaming-PC im Heimnetz (Vorlage: homecloud, Context Chat). Leer heisst: nicht
+      # eingerichtet, die Kette laesst Ollama dann aus.
+      - Ollama__BaseUrl=${NUTRITRACK_OLLAMA_URL:-}
+      - Ollama__Model=${NUTRITRACK_OLLAMA_MODEL:-qwen2.5:14b}
+      # 75 s traegt das erste Laden des Modells nach dem Einschalten (gemessen rund 50 s).
+      - Ollama__TimeoutSeconds=${NUTRITRACK_OLLAMA_TIMEOUT:-75}
+      # Ist der PC aus, entscheidet DIESER Wert, wie lange die Kette auf ihn wartet.
+      - Ollama__ConnectTimeoutSeconds=${NUTRITRACK_OLLAMA_CONNECT_TIMEOUT:-3}
       # OpenFoodFacts verlangt einen User-Agent der Form "AppName/Version (ContactEmail)" und
       # behandelt Aufrufer ohne erkennbare Kennung im Zweifel als Bot. Ohne Wert laeuft alles
       # weiter, aber mit hoeherem Sperrrisiko - deshalb kein Pflichtfeld.

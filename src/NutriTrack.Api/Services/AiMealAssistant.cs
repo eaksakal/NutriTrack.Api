@@ -44,23 +44,11 @@ public class AiMealAssistant(
     {
         var history = await LoadHistoryAsync(userId, ct);
 
-        // EINMAL gewaehlt und dann festgehalten: beide Anlaeufe (der zweite bei Schemabruch)
-        // sollen denselben Anbieter treffen, nicht potenziell verschiedene, falls die Einstellung
-        // zwischen den beiden Aufrufen umschaltet.
+        // Die Kette aus eingestelltem Anbieter und Rueckfaellen. Den zweiten Anlauf bei
+        // Schemabruch macht sie selbst, je Glied (Begruendung in AiProviderChain.CallAsync).
         var provider = providerFactory.Current();
 
-        AiParseResult parsed;
-        try
-        {
-            parsed = await provider.ParseAsync(messages, history.Text, ct);
-        }
-        catch (AiMalformedResponseException)
-        {
-            // Genau ein zweiter Anlauf: Modelle straucheln gelegentlich einmalig am Schema.
-            // Mehr Versuche kosten Kontingent und Wartezeit, ohne die Trefferquote zu heben.
-            logger.LogWarning("{Provider}-Antwort unbrauchbar, ein Wiederholungsversuch.", provider.Name);
-            parsed = await provider.ParseAsync(messages, history.Text, ct);
-        }
+        var parsed = await provider.ParseAsync(messages, history.Text, ct);
 
         if (!string.IsNullOrWhiteSpace(parsed.Question))
             return new ParseMealResponse { Question = parsed.Question };

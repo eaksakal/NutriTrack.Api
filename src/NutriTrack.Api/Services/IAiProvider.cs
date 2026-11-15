@@ -16,17 +16,25 @@ public interface IAiProvider
 {
     public const string Gemini = "gemini";
     public const string OpenRouter = "openrouter";
+    public const string Ollama = "ollama";
 
-    /// <summary>"gemini" oder "openrouter". Wandert ins Fehlerprotokoll, damit nach einem
-    /// Wechsel feststeht, welcher Dienst welchen Fehlschlag verursacht hat.</summary>
+    /// <summary>Alle Anbieter in der Reihenfolge der Rueckfallkette (siehe AiProviderChain):
+    /// zuerst das eigene Heimnetz, dann der kostenlose Vermittler, zuletzt Google mit dem
+    /// knappsten Kontingent.</summary>
+    public static readonly IReadOnlyList<string> All = [Ollama, OpenRouter, Gemini];
+
+    /// <summary>"gemini", "openrouter" oder "ollama". Wandert ins Fehlerprotokoll, damit nach
+    /// einem Wechsel feststeht, welcher Dienst welchen Fehlschlag verursacht hat.</summary>
     string Name { get; }
 
-    /// <summary>Konfigurationsschluessel des Zugangsschluessels dieses Anbieters ("Gemini:ApiKey"
-    /// oder "OpenRouter:ApiKey"). Eine Eigenschaft statt einer Fallunterscheidung an jeder
-    /// Aufrufstelle: ohne sie stuende `provider.Name == IAiProvider.OpenRouter ? ... : ...`
-    /// gleichlautend in AiEndpoints, AdminEndpoints UND GoalsEndpoints - und ein dritter Anbieter
-    /// muesste an drei Stellen zugleich nachgezogen werden statt an einer.</summary>
-    string ApiKeySetting { get; }
+    /// <summary>Der Konfigurationsschluessel, der diesem Anbieter fehlt ("Gemini:ApiKey",
+    /// "OpenRouter:ApiKey", "Ollama:BaseUrl") - null, wenn er eingerichtet ist. Eine Eigenschaft
+    /// statt einer Fallunterscheidung an jeder Aufrufstelle: ohne sie stuende dieselbe Abfrage
+    /// gleichlautend in AiEndpoints, AdminEndpoints UND GoalsEndpoints - und ein weiterer Anbieter
+    /// muesste an drei Stellen zugleich nachgezogen werden statt an einer. Fragt die Antwort
+    /// selbst ab statt nur den Namen zu nennen, weil "eingerichtet" nicht ueberall "Schluessel
+    /// gesetzt" heisst: Ollama braucht eine Adresse, keinen Schluessel.</summary>
+    string? MissingSetting { get; }
 
     Task<AiParseResult> ParseAsync(
         IReadOnlyList<ChatMessage> messages, string historyBlock, CancellationToken ct);

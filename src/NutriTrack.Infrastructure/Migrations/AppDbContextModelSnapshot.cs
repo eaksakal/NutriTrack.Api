@@ -265,6 +265,10 @@ namespace NutriTrack.Infrastructure.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("OllamaModel")
+                        .HasMaxLength(150)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("OpenRouterModel")
                         .HasMaxLength(150)
                         .HasColumnType("TEXT");

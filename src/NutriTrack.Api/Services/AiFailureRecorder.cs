@@ -37,7 +37,9 @@ public class AiFailureRecorder(
     /// nie im Protokoll landen. Die Schreibarbeit hier ist kurz und lokal (SQLite, keine
     /// Fremddienste) und lohnt keinen eigenen Abbruchmechanismus.
     /// </summary>
-    public async Task RecordAsync(string kind, string reason, long durationMs, int? statusCode)
+    /// <param name="provider">Der ausgefallene Anbieter. Null heisst "der eingestellte" - mit der
+    /// Rueckfallkette ist das nicht mehr zwingend derselbe (siehe AiException.Provider).</param>
+    public async Task RecordAsync(string kind, string reason, long durationMs, int? statusCode, string? provider = null)
     {
         var einstellungen = settingsProvider.Read();
 
@@ -46,18 +48,23 @@ public class AiFailureRecorder(
             // Modell und Denkstufe gehoeren zum AUSGEFALLENEN Anbieter, nicht immer zu Gemini:
             // ein Fehlschlag unter OpenRouter schrieb vor diesem Fix Geminis Modellnamen und
             // dessen Denkstufe mit, obwohl beide an diesem Fehlschlag gar nicht beteiligt waren.
-            // Dieselbe Regel wie bei AiProbeResult.ThinkingLevel: OpenRouter kennt keine
+            // Dieselbe Regel wie bei AiProbeResult.ThinkingLevel: nur Gemini kennt eine
             // Denkstufe, und ein erfundener Wert waere falscher als gar keiner.
-            var istOpenRouter = einstellungen.Provider == IAiProvider.OpenRouter;
+            var anbieter = provider ?? einstellungen.Provider;
 
             db.AiFailures.Add(new AiFailure
             {
                 Id = Guid.NewGuid(),
                 OccurredAt = timeProvider.GetUtcNow().UtcDateTime,
                 Kind = kind,
-                Provider = einstellungen.Provider,
-                Model = istOpenRouter ? einstellungen.OpenRouterModel : einstellungen.Model,
-                ThinkingLevel = istOpenRouter ? null : einstellungen.ThinkingLevel,
+                Provider = anbieter,
+                Model = anbieter switch
+                {
+                    IAiProvider.OpenRouter => einstellungen.OpenRouterModel,
+                    IAiProvider.Ollama => einstellungen.OllamaModel,
+                    _ => einstellungen.Model,
+                },
+                ThinkingLevel = anbieter == IAiProvider.Gemini ? einstellungen.ThinkingLevel : null,
                 DurationMs = (int)Math.Min(durationMs, int.MaxValue),
                 StatusCode = statusCode,
                 Reason = reason.Length > MaxReasonLength ? reason[..MaxReasonLength] : reason
@@ -86,4 +93,18 @@ public class AiFailureRecorder(
             logger.LogWarning(ex, "Fehlschlag liess sich nicht protokollieren.");
         }
     }
+
+    /// <summary>
+    /// Art, Grund und Status eines Fehlschlags - dieselbe Lesart wie in den catch-Bloecken von
+    /// AiEndpoints. Gebraucht von der Rueckfallkette, die Fehlschlaege protokolliert, die nie bis
+    /// zu einem Endpunkt durchdringen. Zeitdeckel und Netzausfall unterscheidet die innere
+    /// Ausnahme, nicht der Meldungstext (Begruendung in AiEndpoints).
+    /// </summary>
+    public static (string Kind, string Reason, int? StatusCode) Describe(AiException ex) => ex switch
+    {
+        AiQuotaException => ("Quota", ex.Message, 429),
+        AiMalformedResponseException => ("Schema", ex.Message, null),
+        AiUnavailableException u => (u.InnerException is TaskCanceledException ? "Timeout" : "Unavailable", u.Detail, null),
+        _ => ("Unavailable", ex.Message, null),
+    };
 }
